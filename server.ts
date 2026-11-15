@@ -156,7 +156,17 @@ interface ExportJob {
   error?: string;
 }
 
+interface PaymentLinkRecord {
+  linkId: string;
+  referenceId: string;
+  tierId: PricingTierId;
+  amountPaise: number;
+  shortUrl: string;
+  createdAt: number;
+}
+
 const orders = new Map<string, OrderRecord>();
+const paymentLinks = new Map<string, PaymentLinkRecord>();
 const paidPasses = new Map<string, PaidPassRecord>();
 const jobs = new Map<string, ExportJob>();
 
@@ -199,11 +209,44 @@ function sanitizeDownloadName(raw: string): string {
 }
 
 function decodePngDataUrl(dataUrl: string): Buffer {
-  const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+  const match = /^data:image\/png(?:;[^;,]+)*;base64,([A-Za-z0-9+/=\s]+)$/.exec(dataUrl.trim());
   if (!match) {
     throw new Error('Invalid PNG overlay payload');
   }
-  return Buffer.from(match[1], 'base64');
+  return Buffer.from(match[1].replace(/\s+/g, ''), 'base64');
+}
+
+function resolveCallbackOrigin(req: Request, rawOrigin?: string): string {
+  const candidates = [
+    rawOrigin,
+    typeof req.headers.origin === 'string' ? req.headers.origin : undefined,
+    process.env.APP_URL,
+    `${(typeof req.headers['x-forwarded-proto'] === 'string' ? req.headers['x-forwarded-proto'].split(',')[0] : req.protocol) || 'https'}://${req.get('x-forwarded-host') || req.get('host') || `localhost:${PORT}`}`,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.origin;
+      }
+    } catch {
+      // Try next candidate
+    }
+  }
+  return `http://localhost:${PORT}`;
+}
+
+function resolveTierFromAmount(amountPaise?: number, fallback?: string): PricingTierId {
+  if (fallback && fallback in PRICING_TABLE) {
+    return fallback as PricingTierId;
+  }
+  if (typeof amountPaise === 'number') {
+    if (amountPaise >= 69900) return 'tier_699';
+    if (amountPaise >= 49900) return 'tier_499';
+    if (amountPaise >= 29900) return 'tier_299';
+  }
+  return 'tier_499';
 }
 
 function resolvePublicAssetPath(filename: string): string {
@@ -463,7 +506,7 @@ async function startServer() {
     res.json({ ok: true, razorpayConfigured: Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) });
   });
 
-  // 1. Create Razorpay Order
+  // 1. Create Razorpay Order + Hosted Payment Link (Works in mobile, desktop, & iframe)
   app.post('/api/payments/create-order', async (req: Request, res: Response) => {
     try {
       if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
@@ -471,10 +514,12 @@ async function startServer() {
         return;
       }
 
-      const { tierId, childName, themeId } = req.body as {
+      const { tierId, childName, themeId, themeTitle, callbackOrigin } = req.body as {
         tierId?: PricingTierId;
         childName?: string;
         themeId?: string;
+        themeTitle?: string;
+        callbackOrigin?: string;
       };
 
       const themeEntry = themeId ? THEME_VIDEO_MAP[themeId] : undefined;
@@ -486,52 +531,110 @@ async function startServer() {
       }
 
       const authHeader = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64');
-      const rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${authHeader}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          amount: tier.amountPaise,
-          currency: 'INR',
-          receipt: `sky_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
-          notes: {
-            tierId: tier.id,
-            plan: tier.name,
-            childName: (childName || 'Birthday').slice(0, 40),
-            themeId: (themeId || 'royal-prince').slice(0, 32),
-          },
-        }),
-      });
+      const origin = resolveCallbackOrigin(req, callbackOrigin);
+      const callbackUrl = `${origin}/api/payments/callback?tier=${encodeURIComponent(tier.id)}`;
+      const referenceId = `sky_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+      const cleanChild = (childName || 'Birthday').replace(/[^\w\s-]/g, '').trim().slice(0, 40) || 'Birthday';
+      const cleanThemeTitle = (themeTitle || themeId || 'Birthday Invite')
+        .replace(/[^\w\s-]/g, '')
+        .trim()
+        .slice(0, 48);
 
-      const rzpData = (await rzpRes.json()) as {
+      const [orderRes, linkRes] = await Promise.all([
+        fetch('https://api.razorpay.com/v1/orders', {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${authHeader}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            amount: tier.amountPaise,
+            currency: 'INR',
+            receipt: referenceId,
+            notes: {
+              tierId: tier.id,
+              plan: tier.name,
+              childName: cleanChild,
+              themeId: (themeId || 'royal-prince').slice(0, 32),
+            },
+          }),
+        }),
+        fetch('https://api.razorpay.com/v1/payment_links', {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${authHeader}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            amount: tier.amountPaise,
+            currency: 'INR',
+            accept_partial: false,
+            reference_id: referenceId,
+            description: `Skyline Software - ${cleanThemeTitle} (${cleanChild})`,
+            callback_url: callbackUrl,
+            callback_method: 'get',
+            notes: {
+              tierId: tier.id,
+              plan: tier.name,
+              childName: cleanChild,
+              themeId: (themeId || 'royal-prince').slice(0, 32),
+            },
+          }),
+        }).catch(() => null),
+      ]);
+
+      const rzpOrderData = (await orderRes.json()) as {
         id?: string;
         amount?: number;
         currency?: string;
         error?: { description?: string };
       };
 
-      if (!rzpRes.ok || !rzpData.id) {
+      if (!orderRes.ok || !rzpOrderData.id) {
         res.status(502).json({
-          error: rzpData?.error?.description || 'Failed to create Razorpay order.',
+          error: rzpOrderData?.error?.description || 'Failed to create Razorpay order.',
         });
         return;
       }
 
-      orders.set(rzpData.id, {
-        orderId: rzpData.id,
+      orders.set(rzpOrderData.id, {
+        orderId: rzpOrderData.id,
         tierId: tier.id,
         amountPaise: tier.amountPaise,
         createdAt: Date.now(),
       });
 
+      let paymentLinkId: string | undefined;
+      let shortUrl: string | undefined;
+
+      if (linkRes && linkRes.ok) {
+        const linkData = (await linkRes.json()) as {
+          id?: string;
+          short_url?: string;
+        };
+        if (linkData.id && linkData.short_url) {
+          paymentLinkId = linkData.id;
+          shortUrl = linkData.short_url;
+          paymentLinks.set(linkData.id, {
+            linkId: linkData.id,
+            referenceId,
+            tierId: tier.id,
+            amountPaise: tier.amountPaise,
+            shortUrl: linkData.short_url,
+            createdAt: Date.now(),
+          });
+        }
+      }
+
       res.json({
-        orderId: rzpData.id,
-        amount: rzpData.amount ?? tier.amountPaise,
-        currency: rzpData.currency ?? 'INR',
+        orderId: rzpOrderData.id,
+        amount: rzpOrderData.amount ?? tier.amountPaise,
+        currency: rzpOrderData.currency ?? 'INR',
         keyId: RAZORPAY_KEY_ID,
         tierId: tier.id,
+        paymentLinkId,
+        shortUrl,
+        referenceId,
       });
     } catch (err) {
       res.status(500).json({
@@ -540,7 +643,7 @@ async function startServer() {
     }
   });
 
-  // 2. Razorpay Redirect Callback (Handles POST from checkout.js redirect: true)
+  // 2. Razorpay Redirect Callback (Handles POST from checkout.js redirect if used)
   app.post('/api/payments/callback', async (req: Request, res: Response) => {
     try {
       const body = (req.body || {}) as Record<string, string | undefined>;
@@ -566,9 +669,10 @@ async function startServer() {
       }
 
       const orderRecord = orders.get(orderId);
-      const resolvedTierId: PricingTierId =
-        orderRecord?.tierId ??
-        (queryTier && queryTier in PRICING_TABLE ? (queryTier as PricingTierId) : 'tier_499');
+      const resolvedTierId = resolveTierFromAmount(
+        orderRecord?.amountPaise,
+        orderRecord?.tierId ?? queryTier
+      );
 
       const pass = await issuePaidPass(resolvedTierId, paymentId, orderId);
       res.redirect(
@@ -583,7 +687,7 @@ async function startServer() {
     }
   });
 
-  // 2b. Razorpay Redirect Callback (Handles GET from Payment Links if used)
+  // 2b. Razorpay Redirect Callback (Handles GET from Razorpay Payment Links)
   app.get('/api/payments/callback', async (req: Request, res: Response) => {
     try {
       const paymentId = String(req.query.razorpay_payment_id || '');
@@ -591,9 +695,46 @@ async function startServer() {
       const refId = String(req.query.razorpay_payment_link_reference_id || '');
       const status = String(req.query.razorpay_payment_link_status || '');
       const signature = String(req.query.razorpay_signature || '');
-      const queryTier = typeof req.query.tier === 'string' ? req.query.tier : 'tier_499';
+      const queryTier = typeof req.query.tier === 'string' ? req.query.tier : undefined;
 
-      if (!paymentId || !linkId || status !== 'paid' || !signature) {
+      if (!linkId) {
+        res.redirect(
+          303,
+          `/?payment_error=${encodeURIComponent('Missing Razorpay payment reference.')}#export`
+        );
+        return;
+      }
+
+      const payload = `${linkId}|${refId}|${status}|${paymentId}`;
+      let verified =
+        Boolean(paymentId && signature && status === 'paid') &&
+        verifyHmacSignature(payload, signature);
+
+      let resolvedAmountPaise: number | undefined = paymentLinks.get(linkId)?.amountPaise;
+      let resolvedPaymentId = paymentId;
+
+      if (!verified && RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
+        const authHeader = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64');
+        const linkCheckRes = await fetch(
+          `https://api.razorpay.com/v1/payment_links/${encodeURIComponent(linkId)}`,
+          { headers: { Authorization: `Basic ${authHeader}` } }
+        );
+        if (linkCheckRes.ok) {
+          const linkJson = (await linkCheckRes.json()) as {
+            status?: string;
+            amount?: number;
+            payments?: Array<{ payment_id?: string; status?: string }>;
+          };
+          if (linkJson.status === 'paid') {
+            verified = true;
+            resolvedAmountPaise = linkJson.amount ?? resolvedAmountPaise;
+            resolvedPaymentId =
+              resolvedPaymentId || linkJson.payments?.[0]?.payment_id || `plink_${linkId}`;
+          }
+        }
+      }
+
+      if (!verified || !resolvedPaymentId) {
         res.redirect(
           303,
           `/?payment_error=${encodeURIComponent('Payment was cancelled or incomplete.')}#export`
@@ -601,18 +742,12 @@ async function startServer() {
         return;
       }
 
-      const payload = `${linkId}|${refId}|${status}|${paymentId}`;
-      if (!verifyHmacSignature(payload, signature)) {
-        res.redirect(
-          303,
-          `/?payment_error=${encodeURIComponent('Payment verification failed.')}#export`
-        );
-        return;
-      }
-
-      const resolvedTierId: PricingTierId =
-        queryTier in PRICING_TABLE ? (queryTier as PricingTierId) : 'tier_499';
-      const pass = await issuePaidPass(resolvedTierId, paymentId, linkId);
+      const linkRecord = paymentLinks.get(linkId);
+      const resolvedTierId = resolveTierFromAmount(
+        resolvedAmountPaise,
+        linkRecord?.tierId ?? queryTier
+      );
+      const pass = await issuePaidPass(resolvedTierId, resolvedPaymentId, linkId);
       res.redirect(
         303,
         `/?payment_token=${encodeURIComponent(pass.token)}&tier=${encodeURIComponent(pass.tierId)}#export`
@@ -622,6 +757,71 @@ async function startServer() {
         303,
         `/?payment_error=${encodeURIComponent('Unable to verify payment callback.')}#export`
       );
+    }
+  });
+
+  // 2c. Live Poll Payment Link Status (Auto-unlocks if user paid via hosted Razorpay link in a tab)
+  app.get('/api/payments/link-status/:linkId', async (req: Request, res: Response) => {
+    try {
+      if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+        res.status(500).json({ error: 'Razorpay credentials not configured.' });
+        return;
+      }
+
+      const linkId = String(req.params.linkId || '').trim();
+      if (!linkId) {
+        res.status(400).json({ error: 'Invalid payment link ID.' });
+        return;
+      }
+
+      const authHeader = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64');
+      const linkCheckRes = await fetch(
+        `https://api.razorpay.com/v1/payment_links/${encodeURIComponent(linkId)}`,
+        { headers: { Authorization: `Basic ${authHeader}` } }
+      );
+
+      if (!linkCheckRes.ok) {
+        res.status(502).json({ error: 'Unable to check Razorpay payment link status.' });
+        return;
+      }
+
+      const linkJson = (await linkCheckRes.json()) as {
+        id?: string;
+        status?: string;
+        amount?: number;
+        notes?: { tierId?: string };
+        payments?: Array<{ payment_id?: string; status?: string }>;
+      };
+
+      if (linkJson.status !== 'paid') {
+        res.json({
+          paid: false,
+          status: linkJson.status || 'created',
+        });
+        return;
+      }
+
+      const linkRecord = paymentLinks.get(linkId);
+      const resolvedTierId = resolveTierFromAmount(
+        linkJson.amount ?? linkRecord?.amountPaise,
+        linkRecord?.tierId ?? linkJson.notes?.tierId
+      );
+      const paymentId = linkJson.payments?.[0]?.payment_id || `plink_${linkId}`;
+      const pass = await issuePaidPass(resolvedTierId, paymentId, linkId);
+
+      res.json({
+        paid: true,
+        verified: true,
+        downloadToken: pass.token,
+        tierId: pass.tierId,
+        paymentId: pass.paymentId,
+        orderId: pass.orderId,
+        priceInr: pass.priceInr,
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Unable to check payment status.',
+      });
     }
   });
 
@@ -810,6 +1010,7 @@ async function startServer() {
     }
 
     res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Disposition', `attachment; filename="${job.filename}"`);
     res.setHeader('Cache-Control', 'private, max-age=1800');
     res.sendFile(job.outputPath);

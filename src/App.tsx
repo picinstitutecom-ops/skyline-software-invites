@@ -11,7 +11,11 @@ import {
 } from 'lucide-react';
 import { DEFAULT_INVITATION_CONFIG, getThemeById, THEME_PRESETS } from './data/themes';
 import { BRAND_LOGO_URL, getPricingTier } from './data/pricing';
-import { openRazorpayRedirectCheckout } from './lib/razorpay';
+import {
+  isInsideIframe,
+  openRazorpayModalCheckout,
+  safeFetchJson,
+} from './lib/razorpay';
 import {
   generateExportOverlayPlates,
   generateStillCardPng,
@@ -68,6 +72,11 @@ export default function App() {
   });
 
   const [exportJob, setExportJob] = useState<ExportJobState | null>(null);
+  const [activePaymentLink, setActivePaymentLink] = useState<{
+    linkId: string;
+    shortUrl: string;
+    priceInr: number;
+  } | null>(null);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -211,37 +220,35 @@ export default function App() {
           targetHeight
         );
 
-        const response = await fetch('/api/export', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            themeId: activeTheme.id,
-            childName: activeConfig.childName || activeTheme.defaultChildName,
-            audio: activeConfig.audio,
-            downloadToken: passToUse.downloadToken,
-            plates,
-          }),
-        });
-
-        if (!response.ok) {
-          const errBody = (await response.json().catch(() => ({}))) as { error?: string };
-          if (response.status === 403 || response.status === 404) {
+        let initData: ExportJobState;
+        try {
+          initData = await safeFetchJson<ExportJobState>('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              themeId: activeTheme.id,
+              childName: activeConfig.childName || activeTheme.defaultChildName,
+              audio: activeConfig.audio,
+              downloadToken: passToUse.downloadToken,
+              plates,
+            }),
+          });
+        } catch (apiErr) {
+          const msg = apiErr instanceof Error ? apiErr.message : 'Could not start video rendering.';
+          if (msg.toLowerCase().includes('unlock') || msg.toLowerCase().includes('render limit')) {
             localStorage.removeItem(PAID_PASS_STORAGE_KEY);
             setPaidPass(null);
           }
-          throw new Error(errBody.error || 'Could not start video rendering.');
+          throw new Error(msg);
         }
 
-        const initData = (await response.json()) as ExportJobState;
         setExportJob(initData);
 
         pollTimerRef.current = window.setInterval(async () => {
           try {
-            const statusRes = await fetch(`/api/export/${initData.jobId}/status`);
-            if (!statusRes.ok) {
-              throw new Error('Failed to check export progress.');
-            }
-            const jobState = (await statusRes.json()) as ExportJobState;
+            const jobState = await safeFetchJson<ExportJobState>(
+              `/api/export/${encodeURIComponent(initData.jobId)}/status`
+            );
             setExportJob(jobState);
 
             if (jobState.status === 'completed') {
@@ -330,12 +337,13 @@ export default function App() {
     if (paymentToken) {
       (async () => {
         try {
-          const res = await fetch(`/api/payments/pass/${encodeURIComponent(paymentToken)}`);
-          const data = (await res.json()) as Partial<PaidPass> & {
-            verified?: boolean;
-            error?: string;
-          };
-          if (!res.ok || !data.verified || !data.downloadToken) {
+          const data = await safeFetchJson<
+            Partial<PaidPass> & {
+              verified?: boolean;
+              error?: string;
+            }
+          >(`/api/payments/pass/${encodeURIComponent(paymentToken)}`);
+          if (!data.verified || !data.downloadToken) {
             throw new Error(data.error || 'Could not confirm your payment pass.');
           }
 
@@ -350,6 +358,7 @@ export default function App() {
           };
 
           setPaidPass(verifiedPass);
+          setActivePaymentLink(null);
           try {
             localStorage.setItem(PAID_PASS_STORAGE_KEY, JSON.stringify(verifiedPass));
             localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
@@ -366,6 +375,59 @@ export default function App() {
       })();
     }
   }, [runExportWithPass, scrollToStep]);
+
+  const handleCheckPaymentLink = useCallback(async () => {
+    if (!activePaymentLink?.linkId || isProcessingPayment || isExporting) return;
+    setPaymentError(null);
+    setIsProcessingPayment(true);
+    try {
+      const statusData = await safeFetchJson<{
+        paid?: boolean;
+        verified?: boolean;
+        downloadToken?: string;
+        tierId?: PricingTierId;
+        paymentId?: string;
+        orderId?: string;
+        priceInr?: number;
+      }>(`/api/payments/link-status/${encodeURIComponent(activePaymentLink.linkId)}`);
+
+      if (!statusData.paid || !statusData.downloadToken) {
+        setPaymentError('Payment not received yet on Razorpay. Complete payment and tap Verify Paid.');
+        setIsProcessingPayment(false);
+        return;
+      }
+
+      const verifiedPass: PaidPass = {
+        downloadToken: statusData.downloadToken,
+        tierId: statusData.tierId ?? selectedTierId,
+        paymentId: statusData.paymentId ?? '',
+        orderId: statusData.orderId ?? activePaymentLink.linkId,
+        priceInr: statusData.priceInr ?? selectedTheme.priceInr,
+      };
+      setPaidPass(verifiedPass);
+      setActivePaymentLink(null);
+      try {
+        localStorage.setItem(PAID_PASS_STORAGE_KEY, JSON.stringify(verifiedPass));
+        localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
+      } catch {
+        // Non-fatal storage error
+      }
+      setIsProcessingPayment(false);
+      await runExportWithPass(verifiedPass);
+    } catch (err) {
+      setIsProcessingPayment(false);
+      setPaymentError(
+        err instanceof Error ? err.message : 'Unable to verify Razorpay payment status.'
+      );
+    }
+  }, [
+    activePaymentLink,
+    isExporting,
+    isProcessingPayment,
+    runExportWithPass,
+    selectedTheme.priceInr,
+    selectedTierId,
+  ]);
 
   const handlePayAndExport = useCallback(async () => {
     if (isProcessingPayment || isExporting) return;
@@ -387,31 +449,46 @@ export default function App() {
         // Non-fatal storage error
       }
 
-      const orderRes = await fetch('/api/payments/create-order', {
+      const orderData = await safeFetchJson<{
+        orderId?: string;
+        amount?: number;
+        currency?: string;
+        keyId?: string;
+        paymentLinkId?: string;
+        shortUrl?: string;
+        error?: string;
+      }>('/api/payments/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tierId: selectedTierId,
           childName: config.childName || selectedTheme.defaultChildName,
           themeId: selectedTheme.id,
+          themeTitle: selectedTheme.title,
+          callbackOrigin: window.location.origin,
         }),
       });
 
-      const orderData = (await orderRes.json()) as {
-        orderId?: string;
-        amount?: number;
-        currency?: string;
-        keyId?: string;
-        error?: string;
-      };
-
-      if (!orderRes.ok || !orderData.orderId || !orderData.keyId || !orderData.amount) {
+      if (!orderData.orderId || !orderData.keyId || !orderData.amount) {
         throw new Error(orderData.error || 'Could not initialize Razorpay order.');
       }
 
-      const callbackUrl = `${window.location.origin}/api/payments/callback?tier=${encodeURIComponent(selectedTierId)}`;
+      if (orderData.paymentLinkId && orderData.shortUrl) {
+        setActivePaymentLink({
+          linkId: orderData.paymentLinkId,
+          shortUrl: orderData.shortUrl,
+          priceInr: selectedTheme.priceInr,
+        });
+      }
 
-      await openRazorpayRedirectCheckout({
+      // On standalone browsers & phones, redirect directly to Razorpay's hosted Payment Link
+      if (!isInsideIframe() && orderData.shortUrl) {
+        window.location.assign(orderData.shortUrl);
+        return;
+      }
+
+      // Inside iframe preview: launch non-redirect modal checkout (no callback_url/redirect: true)
+      const rzpResponse = await openRazorpayModalCheckout({
         keyId: orderData.keyId,
         orderId: orderData.orderId,
         amount: orderData.amount,
@@ -419,9 +496,45 @@ export default function App() {
         title: 'Skyline Software',
         description: `${selectedTheme.title} (${selectedTheme.editionLabel})`,
         logoUrl: BRAND_LOGO_URL,
-        callbackUrl,
         prefillName: config.parentsName || config.childName,
       });
+
+      const verifyData = await safeFetchJson<
+        Partial<PaidPass> & { verified?: boolean; error?: string }
+      >('/api/payments/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          razorpay_order_id: rzpResponse.razorpay_order_id,
+          razorpay_payment_id: rzpResponse.razorpay_payment_id,
+          razorpay_signature: rzpResponse.razorpay_signature,
+          tierId: selectedTierId,
+        }),
+      });
+
+      if (!verifyData.verified || !verifyData.downloadToken) {
+        throw new Error(verifyData.error || 'Payment verification failed.');
+      }
+
+      const verifiedPass: PaidPass = {
+        downloadToken: verifyData.downloadToken,
+        tierId: (verifyData.tierId as PricingTierId) ?? selectedTierId,
+        paymentId: verifyData.paymentId ?? rzpResponse.razorpay_payment_id,
+        orderId: verifyData.orderId ?? rzpResponse.razorpay_order_id,
+        priceInr: verifyData.priceInr ?? selectedTheme.priceInr,
+      };
+
+      setPaidPass(verifiedPass);
+      setActivePaymentLink(null);
+      try {
+        localStorage.setItem(PAID_PASS_STORAGE_KEY, JSON.stringify(verifiedPass));
+        localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
+      } catch {
+        // Non-fatal storage error
+      }
+
+      setIsProcessingPayment(false);
+      await runExportWithPass(verifiedPass);
     } catch (err) {
       setIsProcessingPayment(false);
       setPaymentError(
@@ -695,11 +808,13 @@ export default function App() {
                 selectedTierId={selectedTierId}
                 onSelectTier={handleSelectTierFromExport}
                 paidPass={paidPass}
+                activePaymentLink={activePaymentLink}
                 exportJob={exportJob}
                 isProcessingPayment={isProcessingPayment}
                 isExporting={isExporting}
                 paymentError={paymentError}
                 onPayAndExport={handlePayAndExport}
+                onCheckPaymentLink={handleCheckPaymentLink}
                 onRenderWithPass={() => {
                   if (paidPass) void runExportWithPass(paidPass);
                 }}

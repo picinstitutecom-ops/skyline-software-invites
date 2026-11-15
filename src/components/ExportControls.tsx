@@ -18,16 +18,24 @@ import type {
   ThemePreset,
 } from '../types/invitation';
 
+interface ActivePaymentLink {
+  linkId: string;
+  shortUrl: string;
+  priceInr: number;
+}
+
 interface ExportControlsProps {
   theme: ThemePreset;
   selectedTierId: PricingTierId;
   onSelectTier: (id: PricingTierId) => void;
   paidPass: PaidPass | null;
+  activePaymentLink?: ActivePaymentLink | null;
   exportJob: ExportJobState | null;
   isProcessingPayment: boolean;
   isExporting: boolean;
   paymentError: string | null;
   onPayAndExport: () => void;
+  onCheckPaymentLink?: () => void;
   onRenderWithPass: () => void;
   onDownloadStillCard: () => void;
 }
@@ -37,11 +45,13 @@ export function ExportControls({
   selectedTierId,
   onSelectTier,
   paidPass,
+  activePaymentLink,
   exportJob,
   isProcessingPayment,
   isExporting,
   paymentError,
   onPayAndExport,
+  onCheckPaymentLink,
   onRenderWithPass,
   onDownloadStillCard,
 }: ExportControlsProps) {
@@ -111,12 +121,12 @@ export function ExportControls({
             05. {theme.title} · ₹{theme.priceInr} HD Checkout
           </h2>
           <p className="text-[11px] sm:text-xs text-zinc-400 mt-0.5">
-            Redirects to Razorpay, then auto-builds &amp; downloads your HD MP4.
+            Pay securely via Razorpay (@coursekit), then save HD MP4 to phone gallery.
           </p>
         </div>
         <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-purple-300 whitespace-nowrap shrink-0">
           <Lock className="w-3 h-3" />
-          Razorpay
+          @coursekit
         </span>
       </div>
 
@@ -206,6 +216,30 @@ export function ExportControls({
           <span className="text-[11px] font-semibold text-emerald-300 shrink-0">
             Ready
           </span>
+        </div>
+      )}
+
+      {/* Hosted Razorpay Link Option (for UPI / external tab redirect) */}
+      {!isPaidForSelectedTheme && activePaymentLink && activePaymentLink.priceInr >= theme.priceInr && (
+        <div className="p-2.5 rounded-xl bg-[#161329] border border-purple-400/30 flex items-center justify-between gap-2">
+          <a
+            href={activePaymentLink.shortUrl}
+            target="_top"
+            rel="noopener noreferrer"
+            className="text-xs font-semibold text-purple-200 hover:text-white inline-flex items-center gap-1.5 underline underline-offset-2 truncate"
+          >
+            <ExternalLink className="w-3.5 h-3.5 shrink-0 text-purple-400" />
+            Open Hosted Razorpay Link (₹{activePaymentLink.priceInr})
+          </a>
+          {onCheckPaymentLink && (
+            <button
+              type="button"
+              onClick={onCheckPaymentLink}
+              className="btn-3d-surface px-2.5 py-1 rounded-lg bg-[#221d3d] border border-purple-400/25 text-[11px] font-semibold text-zinc-100 whitespace-nowrap shrink-0"
+            >
+              Verify Paid
+            </button>
+          )}
         </div>
       )}
 
