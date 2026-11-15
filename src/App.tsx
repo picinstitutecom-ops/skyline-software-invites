@@ -10,14 +10,8 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { DEFAULT_INVITATION_CONFIG, getThemeById, THEME_PRESETS } from './data/themes';
-import { BRAND_LOGO_URL, getPricingTier } from './data/pricing';
-import {
-  FetchHttpError,
-  isInsideIframe,
-  openRazorpayModalCheckout,
-  PUBLIC_RAZORPAY_KEY_ID,
-  safeFetchJson,
-} from './lib/razorpay';
+import { getPricingTier } from './data/pricing';
+import { FetchHttpError, safeFetchJson } from './lib/razorpay';
 import { exportInvitationVideoInBrowser } from './lib/browserVideoExport';
 import {
   generateExportOverlayPlates,
@@ -37,7 +31,6 @@ import { ThemeSelector } from './components/ThemeSelector';
 import { InvitationForm } from './components/InvitationForm';
 import { AudioMixer } from './components/AudioMixer';
 import { VideoPreviewStage } from './components/VideoPreviewStage';
-import { InteractiveNotice3D } from './components/InteractiveNotice3D';
 import { ExportControls } from './components/ExportControls';
 
 const PAID_PASS_STORAGE_KEY = 'skyline_hd_paid_pass_v1';
@@ -74,12 +67,18 @@ export default function App() {
     }
   });
 
+  const [hasPendingCheckout, setHasPendingCheckout] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(PENDING_CHECKOUT_STORAGE_KEY);
+      if (!saved) return false;
+      const parsed = JSON.parse(saved) as { pendingPaymentPage?: boolean };
+      return Boolean(parsed?.pendingPaymentPage);
+    } catch {
+      return false;
+    }
+  });
+
   const [exportJob, setExportJob] = useState<ExportJobState | null>(null);
-  const [activePaymentLink, setActivePaymentLink] = useState<{
-    linkId: string;
-    shortUrl: string;
-    priceInr: number;
-  } | null>(null);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -94,7 +93,6 @@ export default function App() {
 
   const selectedTheme = getThemeById(config.themeId);
   const selectedTierId = selectedTheme.tierId;
-  const activeTier = getPricingTier(selectedTierId);
 
   const scrollToStep = useCallback((index: number) => {
     const clamped = Math.max(0, Math.min(STUDIO_STEPS.length - 1, index));
@@ -159,12 +157,6 @@ export default function App() {
       const windows = getTimelineWindows(selectedTheme.durationSeconds, config.timingMode);
       setSeekRequest({ time: windows.detailsStart + 2.5, nonce: Date.now() });
     }
-  }, [config.timingMode, selectedTheme.durationSeconds]);
-
-  const handleJumpToVideoNotice = useCallback(() => {
-    const windows = getTimelineWindows(selectedTheme.durationSeconds, config.timingMode);
-    setSeekRequest({ time: windows.detailsStart + 2.5, nonce: Date.now() });
-    document.getElementById('preview')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [config.timingMode, selectedTheme.durationSeconds]);
 
   useEffect(() => {
@@ -340,27 +332,142 @@ export default function App() {
     [config, isExporting]
   );
 
-  // Handle Razorpay Redirect Callback Return (?payment_token=... or ?payment_error=...)
+  const handleBeforePaymentRedirect = useCallback(() => {
+    setPaymentError(null);
+    setHasPendingCheckout(true);
+    try {
+      localStorage.setItem(
+        PENDING_CHECKOUT_STORAGE_KEY,
+        JSON.stringify({
+          config,
+          selectedTierId,
+          pendingPaymentPage: true,
+        })
+      );
+    } catch {
+      // Non-fatal storage error
+    }
+  }, [config, selectedTierId]);
+
+  const handleVerifyReceipt = useCallback(
+    async (receiptQuery: string, configOverride?: InvitationConfig, tierOverride?: PricingTierId) => {
+      const cleaned = receiptQuery.trim();
+      if (!cleaned || isProcessingPayment || isExporting) return;
+
+      const effectiveTierId = tierOverride ?? selectedTierId;
+      const effectiveTier = getPricingTier(effectiveTierId);
+
+      setPaymentError(null);
+      setIsProcessingPayment(true);
+
+      try {
+        let verifiedPass: PaidPass;
+        try {
+          const data = await safeFetchJson<
+            Partial<PaidPass> & {
+              verified?: boolean;
+              error?: string;
+            }
+          >('/api/payments/verify-receipt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              receiptQuery: cleaned,
+              tierId: effectiveTierId,
+            }),
+          });
+
+          if (!data.verified || !data.downloadToken) {
+            throw new Error(data.error || 'Could not verify your Razorpay receipt.');
+          }
+
+          verifiedPass = {
+            downloadToken: data.downloadToken,
+            tierId: (data.tierId as PricingTierId) ?? effectiveTierId,
+            paymentId: data.paymentId ?? cleaned,
+            orderId: data.orderId ?? 'payment_page',
+            priceInr:
+              data.priceInr ??
+              getPricingTier((data.tierId as PricingTierId) ?? effectiveTierId).priceInr,
+          };
+        } catch (verifyErr) {
+          if (
+            verifyErr instanceof FetchHttpError &&
+            (verifyErr.status === 404 || verifyErr.status === 405) &&
+            /^pay_[A-Za-z0-9]{10,}$/.test(cleaned)
+          ) {
+            verifiedPass = {
+              downloadToken: `direct_${cleaned}`,
+              tierId: effectiveTierId,
+              paymentId: cleaned,
+              orderId: 'payment_page',
+              priceInr: effectiveTier.priceInr,
+            };
+          } else {
+            throw verifyErr;
+          }
+        }
+
+        setPaidPass(verifiedPass);
+        setHasPendingCheckout(false);
+        try {
+          localStorage.setItem(PAID_PASS_STORAGE_KEY, JSON.stringify(verifiedPass));
+          localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
+        } catch {
+          // Non-fatal storage error
+        }
+
+        setIsProcessingPayment(false);
+        await runExportWithPass(verifiedPass, configOverride);
+      } catch (err) {
+        setIsProcessingPayment(false);
+        setPaymentError(
+          err instanceof Error
+            ? err.message
+            : 'Unable to verify Razorpay payment receipt.'
+        );
+      }
+    },
+    [isExporting, isProcessingPayment, runExportWithPass, selectedTierId]
+  );
+
+  // Handle Razorpay Redirect Callback Return (?payment_token=..., ?razorpay_payment_id=..., or ?payment_error=...)
   useEffect(() => {
     if (redirectHandledRef.current) return;
 
     const params = new URLSearchParams(window.location.search);
-    const paymentToken = params.get('payment_token');
-    const urlError = params.get('payment_error');
+    const hashStr = window.location.hash.includes('?')
+      ? window.location.hash.slice(window.location.hash.indexOf('?') + 1)
+      : window.location.hash.replace(/^#/, '');
+    const hashParams = new URLSearchParams(hashStr.includes('=') ? hashStr : '');
 
-    if (!paymentToken && !urlError) return;
+    const paymentToken = params.get('payment_token') || hashParams.get('payment_token');
+    const urlError = params.get('payment_error') || hashParams.get('payment_error');
+    const urlPaymentId =
+      params.get('razorpay_payment_id') ||
+      params.get('payment_id') ||
+      params.get('rp_payment_id') ||
+      hashParams.get('razorpay_payment_id') ||
+      hashParams.get('payment_id');
+
+    if (!paymentToken && !urlError && !urlPaymentId) return;
     redirectHandledRef.current = true;
 
     let restoredConfig: InvitationConfig | undefined;
+    let restoredTierId: PricingTierId | undefined;
     try {
       const saved = localStorage.getItem(PENDING_CHECKOUT_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as {
           config?: InvitationConfig;
+          selectedTierId?: PricingTierId;
         };
         if (parsed?.config) {
           restoredConfig = parsed.config;
           setConfig(parsed.config);
+        }
+        if (parsed?.selectedTierId) {
+          restoredTierId = parsed.selectedTierId;
         }
       }
     } catch {
@@ -379,6 +486,11 @@ export default function App() {
       return;
     }
 
+    if (urlPaymentId) {
+      void handleVerifyReceipt(urlPaymentId, restoredConfig, restoredTierId);
+      return;
+    }
+
     if (paymentToken) {
       (async () => {
         try {
@@ -394,16 +506,16 @@ export default function App() {
 
           const verifiedPass: PaidPass = {
             downloadToken: data.downloadToken,
-            tierId: (data.tierId as PricingTierId) ?? 'tier_499',
+            tierId: (data.tierId as PricingTierId) ?? restoredTierId ?? 'tier_499',
             paymentId: data.paymentId ?? '',
             orderId: data.orderId ?? '',
             priceInr:
               data.priceInr ??
-              getPricingTier((data.tierId as PricingTierId) ?? 'tier_499').priceInr,
+              getPricingTier((data.tierId as PricingTierId) ?? restoredTierId ?? 'tier_499').priceInr,
           };
 
           setPaidPass(verifiedPass);
-          setActivePaymentLink(null);
+          setHasPendingCheckout(false);
           try {
             localStorage.setItem(PAID_PASS_STORAGE_KEY, JSON.stringify(verifiedPass));
             localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
@@ -419,256 +531,7 @@ export default function App() {
         }
       })();
     }
-  }, [runExportWithPass, scrollToStep]);
-
-  const handleCheckPaymentLink = useCallback(async () => {
-    if (!activePaymentLink?.linkId || isProcessingPayment || isExporting) return;
-    setPaymentError(null);
-    setIsProcessingPayment(true);
-    try {
-      const statusData = await safeFetchJson<{
-        paid?: boolean;
-        verified?: boolean;
-        downloadToken?: string;
-        tierId?: PricingTierId;
-        paymentId?: string;
-        orderId?: string;
-        priceInr?: number;
-      }>(`/api/payments/link-status/${encodeURIComponent(activePaymentLink.linkId)}`);
-
-      if (!statusData.paid || !statusData.downloadToken) {
-        setPaymentError('Payment not received yet on Razorpay. Complete payment and tap Verify Paid.');
-        setIsProcessingPayment(false);
-        return;
-      }
-
-      const verifiedPass: PaidPass = {
-        downloadToken: statusData.downloadToken,
-        tierId: statusData.tierId ?? selectedTierId,
-        paymentId: statusData.paymentId ?? '',
-        orderId: statusData.orderId ?? activePaymentLink.linkId,
-        priceInr: statusData.priceInr ?? selectedTheme.priceInr,
-      };
-      setPaidPass(verifiedPass);
-      setActivePaymentLink(null);
-      try {
-        localStorage.setItem(PAID_PASS_STORAGE_KEY, JSON.stringify(verifiedPass));
-        localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
-      } catch {
-        // Non-fatal storage error
-      }
-      setIsProcessingPayment(false);
-      await runExportWithPass(verifiedPass);
-    } catch (err) {
-      setIsProcessingPayment(false);
-      setPaymentError(
-        err instanceof Error ? err.message : 'Unable to verify Razorpay payment status.'
-      );
-    }
-  }, [
-    activePaymentLink,
-    isExporting,
-    isProcessingPayment,
-    runExportWithPass,
-    selectedTheme.priceInr,
-    selectedTierId,
-  ]);
-
-  const handlePayAndExport = useCallback(async () => {
-    if (isProcessingPayment || isExporting) return;
-    setPaymentError(null);
-
-    if (paidPass && paidPass.priceInr >= selectedTheme.priceInr) {
-      await runExportWithPass(paidPass);
-      return;
-    }
-
-    setIsProcessingPayment(true);
-    try {
-      try {
-        localStorage.setItem(
-          PENDING_CHECKOUT_STORAGE_KEY,
-          JSON.stringify({ config, selectedTierId })
-        );
-      } catch {
-        // Non-fatal storage error
-      }
-
-      let orderData: {
-        fallbackDirectCheckout?: boolean;
-        orderId?: string;
-        amount?: number;
-        currency?: string;
-        keyId?: string;
-        paymentLinkId?: string;
-        shortUrl?: string;
-        error?: string;
-      } | null = null;
-
-      try {
-        orderData = await safeFetchJson('/api/payments/create-order', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tierId: selectedTierId,
-            childName: config.childName || selectedTheme.defaultChildName,
-            themeId: selectedTheme.id,
-            themeTitle: selectedTheme.title,
-            callbackOrigin: window.location.origin,
-          }),
-        });
-      } catch (createErr) {
-        if (
-          createErr instanceof FetchHttpError &&
-          (createErr.status === 404 || createErr.status === 405 || createErr.status >= 500)
-        ) {
-          orderData = {
-            fallbackDirectCheckout: true,
-            keyId: PUBLIC_RAZORPAY_KEY_ID,
-            amount: selectedTheme.priceInr * 100,
-            currency: 'INR',
-          };
-        } else {
-          throw createErr;
-        }
-      }
-
-      const resolvedKeyId = orderData?.keyId || PUBLIC_RAZORPAY_KEY_ID;
-      const resolvedAmount = orderData?.amount || selectedTheme.priceInr * 100;
-
-      // Fallback Direct Standard Checkout when deployed statically or without server secret
-      if (orderData?.fallbackDirectCheckout || !orderData?.orderId) {
-        const directResp = await openRazorpayModalCheckout({
-          keyId: resolvedKeyId,
-          amount: resolvedAmount,
-          currency: orderData?.currency || 'INR',
-          title: 'Skyline Software',
-          description: `${selectedTheme.title} (${selectedTheme.editionLabel})`,
-          logoUrl: BRAND_LOGO_URL,
-          prefillName: config.parentsName || config.childName,
-        });
-
-        const directPass: PaidPass = {
-          downloadToken: `direct_${directResp.razorpay_payment_id}`,
-          tierId: selectedTierId,
-          paymentId: directResp.razorpay_payment_id,
-          orderId: directResp.razorpay_order_id || 'direct_checkout',
-          priceInr: selectedTheme.priceInr,
-        };
-
-        setPaidPass(directPass);
-        setActivePaymentLink(null);
-        try {
-          localStorage.setItem(PAID_PASS_STORAGE_KEY, JSON.stringify(directPass));
-          localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
-        } catch {
-          // Non-fatal storage error
-        }
-
-        setIsProcessingPayment(false);
-        await runExportWithPass(directPass);
-        return;
-      }
-
-      if (orderData.paymentLinkId && orderData.shortUrl) {
-        setActivePaymentLink({
-          linkId: orderData.paymentLinkId,
-          shortUrl: orderData.shortUrl,
-          priceInr: selectedTheme.priceInr,
-        });
-      }
-
-      // On standalone browsers & phones, redirect directly to Razorpay's hosted Payment Link
-      if (!isInsideIframe() && orderData.shortUrl) {
-        window.location.assign(orderData.shortUrl);
-        return;
-      }
-
-      // Inside iframe preview: launch non-redirect modal checkout (no callback_url/redirect: true)
-      const rzpResponse = await openRazorpayModalCheckout({
-        keyId: resolvedKeyId,
-        orderId: orderData.orderId,
-        amount: resolvedAmount,
-        currency: orderData.currency || 'INR',
-        title: 'Skyline Software',
-        description: `${selectedTheme.title} (${selectedTheme.editionLabel})`,
-        logoUrl: BRAND_LOGO_URL,
-        prefillName: config.parentsName || config.childName,
-      });
-
-      let verifiedPass: PaidPass;
-      try {
-        const verifyData = await safeFetchJson<
-          Partial<PaidPass> & { verified?: boolean; error?: string }
-        >('/api/payments/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            razorpay_order_id: rzpResponse.razorpay_order_id || orderData.orderId,
-            razorpay_payment_id: rzpResponse.razorpay_payment_id,
-            razorpay_signature: rzpResponse.razorpay_signature,
-            tierId: selectedTierId,
-          }),
-        });
-
-        if (!verifyData.verified || !verifyData.downloadToken) {
-          throw new Error(verifyData.error || 'Payment verification failed.');
-        }
-
-        verifiedPass = {
-          downloadToken: verifyData.downloadToken,
-          tierId: (verifyData.tierId as PricingTierId) ?? selectedTierId,
-          paymentId: verifyData.paymentId ?? rzpResponse.razorpay_payment_id,
-          orderId: verifyData.orderId ?? orderData.orderId,
-          priceInr: verifyData.priceInr ?? selectedTheme.priceInr,
-        };
-      } catch (verifyErr) {
-        if (
-          verifyErr instanceof FetchHttpError &&
-          (verifyErr.status === 404 || verifyErr.status === 405)
-        ) {
-          verifiedPass = {
-            downloadToken: `direct_${rzpResponse.razorpay_payment_id}`,
-            tierId: selectedTierId,
-            paymentId: rzpResponse.razorpay_payment_id,
-            orderId: rzpResponse.razorpay_order_id || orderData.orderId,
-            priceInr: selectedTheme.priceInr,
-          };
-        } else {
-          throw verifyErr;
-        }
-      }
-
-      setPaidPass(verifiedPass);
-      setActivePaymentLink(null);
-      try {
-        localStorage.setItem(PAID_PASS_STORAGE_KEY, JSON.stringify(verifiedPass));
-        localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
-      } catch {
-        // Non-fatal storage error
-      }
-
-      setIsProcessingPayment(false);
-      await runExportWithPass(verifiedPass);
-    } catch (err) {
-      setIsProcessingPayment(false);
-      setPaymentError(
-        err instanceof Error ? err.message : 'Unable to complete Razorpay checkout.'
-      );
-    }
-  }, [
-    config,
-    isExporting,
-    isProcessingPayment,
-    paidPass,
-    runExportWithPass,
-    selectedTheme.defaultChildName,
-    selectedTheme.editionLabel,
-    selectedTheme.id,
-    selectedTheme.priceInr,
-    selectedTheme.title,
-    selectedTierId,
-  ]);
+  }, [handleVerifyReceipt, runExportWithPass, scrollToStep]);
 
   const handleDownloadStillCard = useCallback(async () => {
     const dataUrl = await generateStillCardPng(videoRef.current, config, selectedTheme);
@@ -769,7 +632,7 @@ export default function App() {
       <main id="top" className="flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-6 py-4 space-y-4">
         {/* Big Clean Hero Heading */}
         <h1
-          className="font-display text-2xl sm:text-4xl lg:text-[42px] font-bold tracking-tight text-white leading-[1.12]"
+          className="font-display text-2xl sm:text-4xl lg:text-[42px] font-bold tracking-tight text-white leading-[1.12] text-center"
           style={{ textWrap: 'balance' }}
         >
           Magical 3D{' '}
@@ -778,24 +641,14 @@ export default function App() {
           </span>
         </h1>
 
-        {/* TOP STAGE: Live Video Preview + 3D Interactive Notice */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 sm:gap-4 items-start">
-          <div className="lg:col-span-6">
-            <VideoPreviewStage
-              theme={selectedTheme}
-              config={config}
-              seekRequest={seekRequest}
-              videoRef={videoRef}
-            />
-          </div>
-
-          <div className="lg:col-span-6">
-            <InteractiveNotice3D
-              config={config}
-              theme={selectedTheme}
-              onJumpToVideoNotice={handleJumpToVideoNotice}
-            />
-          </div>
+        {/* TOP STAGE: Centered Live Video Preview */}
+        <div className="max-w-2xl mx-auto w-full">
+          <VideoPreviewStage
+            theme={selectedTheme}
+            config={config}
+            seekRequest={seekRequest}
+            videoRef={videoRef}
+          />
         </div>
 
         {/* BOTTOM STAGE: Cute 3D Step Buttons + Sideways Scrolling Details Deck */}
@@ -845,7 +698,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Horizontal Sideways Scrolling Container (items-start prevents uneven tall gaps) */}
+          {/* Horizontal Sideways Scrolling Container */}
           <div
             ref={deckScrollRef}
             onScroll={handleDeckScroll}
@@ -923,13 +776,15 @@ export default function App() {
                 selectedTierId={selectedTierId}
                 onSelectTier={handleSelectTierFromExport}
                 paidPass={paidPass}
-                activePaymentLink={activePaymentLink}
+                hasPendingCheckout={hasPendingCheckout}
                 exportJob={exportJob}
                 isProcessingPayment={isProcessingPayment}
                 isExporting={isExporting}
                 paymentError={paymentError}
-                onPayAndExport={handlePayAndExport}
-                onCheckPaymentLink={handleCheckPaymentLink}
+                onBeforePaymentRedirect={handleBeforePaymentRedirect}
+                onVerifyReceipt={(query) => {
+                  void handleVerifyReceipt(query);
+                }}
                 onRenderWithPass={() => {
                   if (paidPass) void runExportWithPass(paidPass);
                 }}

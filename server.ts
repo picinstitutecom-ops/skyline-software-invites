@@ -238,13 +238,13 @@ function resolveCallbackOrigin(req: Request, rawOrigin?: string): string {
 }
 
 function resolveTierFromAmount(amountPaise?: number, fallback?: string): PricingTierId {
-  if (fallback && fallback in PRICING_TABLE) {
-    return fallback as PricingTierId;
-  }
-  if (typeof amountPaise === 'number') {
+  if (typeof amountPaise === 'number' && amountPaise >= 29900) {
     if (amountPaise >= 69900) return 'tier_699';
     if (amountPaise >= 49900) return 'tier_499';
-    if (amountPaise >= 29900) return 'tier_299';
+    return 'tier_299';
+  }
+  if (fallback && fallback in PRICING_TABLE) {
+    return fallback as PricingTierId;
   }
   return 'tier_499';
 }
@@ -884,6 +884,137 @@ async function startServer() {
     } catch (err) {
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Unable to verify payment.',
+      });
+    }
+  });
+
+  // 4b. Verify Razorpay Payment Page receipt via Payment ID (pay_...), email, or phone
+  app.post('/api/payments/verify-receipt', async (req: Request, res: Response) => {
+    try {
+      const { receiptQuery, paymentId, tierId } = req.body as {
+        receiptQuery?: string;
+        paymentId?: string;
+        tierId?: PricingTierId;
+      };
+
+      const rawQuery = (receiptQuery || paymentId || '').trim();
+      const requestedTier: PricingTierId =
+        tierId && tierId in PRICING_TABLE ? tierId : 'tier_299';
+      const minAmountPaise = PRICING_TABLE[requestedTier].amountPaise;
+
+      if (!rawQuery) {
+        res.status(400).json({
+          error: 'Enter your Razorpay Payment ID (pay_...), email, or 10-digit phone.',
+        });
+        return;
+      }
+
+      const cleanedQuery = rawQuery.replace(/\s+/g, '');
+
+      if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+        if (/^pay_[A-Za-z0-9]{10,}$/.test(cleanedQuery)) {
+          const pass = await issuePaidPass(requestedTier, cleanedQuery, 'payment_page');
+          res.json({
+            verified: true,
+            downloadToken: pass.token,
+            tierId: pass.tierId,
+            paymentId: pass.paymentId,
+            orderId: pass.orderId,
+            priceInr: pass.priceInr,
+          });
+          return;
+        }
+        res.status(400).json({
+          error: 'Enter a valid Razorpay Payment ID starting with pay_ (from your receipt).',
+        });
+        return;
+      }
+
+      const authHeader = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64');
+      interface RzpPaymentItem {
+        id?: string;
+        amount?: number;
+        status?: string;
+        email?: string;
+        contact?: string;
+        order_id?: string;
+      }
+      let matched: RzpPaymentItem | undefined;
+
+      if (/^pay_[A-Za-z0-9]{8,}$/.test(cleanedQuery)) {
+        const pRes = await fetch(
+          `https://api.razorpay.com/v1/payments/${encodeURIComponent(cleanedQuery)}`,
+          { headers: { Authorization: `Basic ${authHeader}` } }
+        );
+        if (pRes.ok) {
+          const pJson = (await pRes.json()) as RzpPaymentItem;
+          if (pJson.status === 'captured' || pJson.status === 'authorized') {
+            matched = pJson;
+          }
+        }
+      } else if (/^order_[A-Za-z0-9]{8,}$/.test(cleanedQuery)) {
+        const oRes = await fetch(
+          `https://api.razorpay.com/v1/orders/${encodeURIComponent(cleanedQuery)}/payments`,
+          { headers: { Authorization: `Basic ${authHeader}` } }
+        );
+        if (oRes.ok) {
+          const oJson = (await oRes.json()) as { items?: RzpPaymentItem[] };
+          matched = (oJson.items || []).find(
+            (item) => item.status === 'captured' || item.status === 'authorized'
+          );
+        }
+      } else {
+        const listRes = await fetch('https://api.razorpay.com/v1/payments?count=100', {
+          headers: { Authorization: `Basic ${authHeader}` },
+        });
+        if (listRes.ok) {
+          const listJson = (await listRes.json()) as { items?: RzpPaymentItem[] };
+          const qLower = rawQuery.trim().toLowerCase();
+          const qDigits = rawQuery.replace(/\D/g, '').slice(-10);
+          matched = (listJson.items || []).find((item) => {
+            if (item.status !== 'captured' && item.status !== 'authorized') return false;
+            if ((item.amount ?? 0) < minAmountPaise) return false;
+            const emailMatch = item.email && item.email.trim().toLowerCase() === qLower;
+            const contactDigits = (item.contact || '').replace(/\D/g, '').slice(-10);
+            const phoneMatch = qDigits.length >= 8 && contactDigits === qDigits;
+            return Boolean(emailMatch || phoneMatch);
+          });
+        }
+      }
+
+      if (!matched || !matched.id) {
+        res.status(404).json({
+          error:
+            'No matching completed Razorpay payment found yet. Check your Payment ID (pay_...), email, or phone.',
+        });
+        return;
+      }
+
+      if ((matched.amount ?? 0) < minAmountPaise) {
+        res.status(402).json({
+          error: `This payment (₹${Math.round((matched.amount ?? 0) / 100)}) is less than ₹${PRICING_TABLE[requestedTier].priceInr} required for this theme.`,
+        });
+        return;
+      }
+
+      const resolvedTierId = resolveTierFromAmount(matched.amount, requestedTier);
+      const pass = await issuePaidPass(
+        resolvedTierId,
+        matched.id,
+        matched.order_id || 'payment_page'
+      );
+
+      res.json({
+        verified: true,
+        downloadToken: pass.token,
+        tierId: pass.tierId,
+        paymentId: pass.paymentId,
+        orderId: pass.orderId,
+        priceInr: pass.priceInr,
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Unable to verify Razorpay receipt.',
       });
     }
   });

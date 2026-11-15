@@ -1,16 +1,18 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import {
   Check,
   CheckCircle2,
   Download,
   ExternalLink,
   FileImage,
+  KeyRound,
   Loader2,
   Lock,
   Share2,
   Smartphone,
 } from 'lucide-react';
 import { PRICING_TIERS } from '../data/pricing';
+import { isInsideIframe } from '../lib/razorpay';
 import type {
   ExportJobState,
   PaidPass,
@@ -18,24 +20,18 @@ import type {
   ThemePreset,
 } from '../types/invitation';
 
-interface ActivePaymentLink {
-  linkId: string;
-  shortUrl: string;
-  priceInr: number;
-}
-
 interface ExportControlsProps {
   theme: ThemePreset;
   selectedTierId: PricingTierId;
   onSelectTier: (id: PricingTierId) => void;
   paidPass: PaidPass | null;
-  activePaymentLink?: ActivePaymentLink | null;
+  hasPendingCheckout: boolean;
   exportJob: ExportJobState | null;
   isProcessingPayment: boolean;
   isExporting: boolean;
   paymentError: string | null;
-  onPayAndExport: () => void;
-  onCheckPaymentLink?: () => void;
+  onBeforePaymentRedirect: () => void;
+  onVerifyReceipt: (receiptQuery: string) => void;
   onRenderWithPass: () => void;
   onDownloadStillCard: () => void;
 }
@@ -45,23 +41,32 @@ export function ExportControls({
   selectedTierId,
   onSelectTier,
   paidPass,
-  activePaymentLink,
+  hasPendingCheckout,
   exportJob,
   isProcessingPayment,
   isExporting,
   paymentError,
-  onPayAndExport,
-  onCheckPaymentLink,
+  onBeforePaymentRedirect,
+  onVerifyReceipt,
   onRenderWithPass,
   onDownloadStillCard,
 }: ExportControlsProps) {
   const [isSavingToGallery, setIsSavingToGallery] = useState(false);
+  const [receiptQuery, setReceiptQuery] = useState('');
+
   const activeTier =
     PRICING_TIERS.find((t) => t.id === selectedTierId) ?? PRICING_TIERS[1];
   const progress = exportJob?.progress ?? 0;
 
   const isPaidForSelectedTheme =
     paidPass !== null && paidPass.priceInr >= theme.priceInr;
+
+  const handleReceiptSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const cleaned = receiptQuery.trim();
+    if (!cleaned || isProcessingPayment || isExporting) return;
+    onVerifyReceipt(cleaned);
+  };
 
   const handlePhoneGallerySave = async () => {
     if (!exportJob?.downloadUrl || !exportJob?.filename) return;
@@ -124,12 +129,12 @@ export function ExportControls({
             05. {theme.title} · ₹{theme.priceInr} HD Checkout
           </h2>
           <p className="text-[11px] sm:text-xs text-zinc-400 mt-0.5">
-            Pay securely via Razorpay (@coursekit), then save HD MP4 to phone gallery.
+            Pay via Razorpay Payment Page, then verify receipt to save HD MP4 to phone gallery.
           </p>
         </div>
         <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-purple-300 whitespace-nowrap shrink-0">
           <Lock className="w-3 h-3" />
-          @coursekit
+          Razorpay
         </span>
       </div>
 
@@ -222,30 +227,6 @@ export function ExportControls({
         </div>
       )}
 
-      {/* Hosted Razorpay Link Option (for UPI / external tab redirect) */}
-      {!isPaidForSelectedTheme && activePaymentLink && activePaymentLink.priceInr >= theme.priceInr && (
-        <div className="p-2.5 rounded-xl bg-[#161329] border border-purple-400/30 flex items-center justify-between gap-2">
-          <a
-            href={activePaymentLink.shortUrl}
-            target="_top"
-            rel="noopener noreferrer"
-            className="text-xs font-semibold text-purple-200 hover:text-white inline-flex items-center gap-1.5 underline underline-offset-2 truncate"
-          >
-            <ExternalLink className="w-3.5 h-3.5 shrink-0 text-purple-400" />
-            Open Hosted Razorpay Link (₹{activePaymentLink.priceInr})
-          </a>
-          {onCheckPaymentLink && (
-            <button
-              type="button"
-              onClick={onCheckPaymentLink}
-              className="btn-3d-surface px-2.5 py-1 rounded-lg bg-[#221d3d] border border-purple-400/25 text-[11px] font-semibold text-zinc-100 whitespace-nowrap shrink-0"
-            >
-              Verify Paid
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Payment Error Alert */}
       {paymentError && (
         <div
@@ -333,65 +314,129 @@ export function ExportControls({
       )}
 
       {/* Cute 3D Primary Action Buttons */}
-      <div className="flex items-center gap-2">
-        {isPaidForSelectedTheme ? (
-          <button
-            type="button"
-            disabled={isExporting}
-            onClick={onRenderWithPass}
-            className="btn-3d-purple flex-1 h-10 px-4 rounded-2xl bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800/60 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
-          >
-            {isExporting ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Rendering ({progress}%)
-              </>
-            ) : (
-              <>
-                <Download className="w-4 h-4" />
-                {exportJob?.status === 'completed'
-                  ? 'Re-render HD MP4'
-                  : `Download ${theme.title} MP4`}
-              </>
-            )}
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={isProcessingPayment || isExporting}
-            onClick={onPayAndExport}
-            className="btn-3d-purple flex-1 h-10 px-4 rounded-2xl bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800/60 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
-          >
-            {isProcessingPayment ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Redirecting...
-              </>
-            ) : isExporting ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Rendering ({progress}%)
-              </>
-            ) : (
-              <>
-                <ExternalLink className="w-4 h-4" />
-                Pay ₹{theme.priceInr} &amp; Download HD
-              </>
-            )}
-          </button>
-        )}
+      {(() => {
+        const inIframe = isInsideIframe();
+        return (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              {isPaidForSelectedTheme ? (
+                <button
+                  type="button"
+                  disabled={isExporting}
+                  onClick={onRenderWithPass}
+                  className="btn-3d-purple flex-1 h-11 px-4 rounded-2xl bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800/60 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+                >
+                  {isExporting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Rendering ({progress}%)
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4" />
+                      {exportJob?.status === 'completed'
+                        ? 'Re-render HD MP4'
+                        : `Download ${theme.title} MP4`}
+                    </>
+                  )}
+                </button>
+              ) : (
+                <a
+                  href={activeTier.paymentPageUrl}
+                  target={inIframe ? '_blank' : '_self'}
+                  rel="noopener noreferrer"
+                  onClick={(e) => {
+                    onBeforePaymentRedirect();
+                    if (!inIframe) {
+                      e.preventDefault();
+                      window.location.assign(activeTier.paymentPageUrl);
+                    }
+                  }}
+                  className="btn-3d-purple flex-1 h-11 px-4 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  Pay ₹{activeTier.priceInr} &amp; Download HD
+                </a>
+              )}
 
-        {isPaidForSelectedTheme && activeTier.includesStillCard && (
-          <button
-            type="button"
-            onClick={onDownloadStillCard}
-            className="btn-3d-surface h-10 px-3.5 rounded-2xl border border-purple-400/25 bg-[#191729] text-zinc-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
-          >
-            <FileImage className="w-3.5 h-3.5 text-purple-300" />
-            PNG
-          </button>
-        )}
-      </div>
+              {isPaidForSelectedTheme && activeTier.includesStillCard && (
+                <button
+                  type="button"
+                  onClick={onDownloadStillCard}
+                  className="btn-3d-surface h-11 px-3.5 rounded-2xl border border-purple-400/25 bg-[#191729] text-zinc-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                >
+                  <FileImage className="w-3.5 h-3.5 text-purple-300" />
+                  PNG
+                </button>
+              )}
+            </div>
+
+            {!isPaidForSelectedTheme && (
+              <div className="flex items-center justify-between gap-2 px-1 text-[10px] text-zinc-400">
+                <span className="truncate">
+                  Razorpay Page: {activeTier.paymentPageUrl}
+                </span>
+                <span className="text-purple-300 whitespace-nowrap shrink-0">
+                  {inIframe ? 'Opens checkout tab' : 'Direct redirect'}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Inline Receipt Verification Form for Razorpay Payment Pages */}
+      {!isPaidForSelectedTheme && (
+        <form
+          onSubmit={handleReceiptSubmit}
+          className={`p-3 rounded-xl border space-y-2 transition-colors ${
+            hasPendingCheckout
+              ? 'bg-[#1a1532] border-purple-400/45'
+              : 'bg-[#151324] border-purple-400/20'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <label
+              htmlFor="receipt-verify-input"
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-purple-200"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              Already Paid ₹{activeTier.priceInr}? Unlock HD Download
+            </label>
+            <span className="text-[10px] font-mono text-zinc-400">
+              Instant verify
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              id="receipt-verify-input"
+              type="text"
+              value={receiptQuery}
+              onChange={(e) => setReceiptQuery(e.target.value)}
+              disabled={isProcessingPayment || isExporting}
+              placeholder="Payment ID (pay_...), email, or phone"
+              className="flex-1 min-w-0 h-9 px-3 rounded-xl bg-[#0D0C16] border border-purple-400/25 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+            <button
+              type="submit"
+              disabled={
+                !receiptQuery.trim() || isProcessingPayment || isExporting
+              }
+              className="btn-3d-emerald h-9 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900/50 disabled:text-zinc-400 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
+            >
+              {isProcessingPayment ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Verifying...
+                </>
+              ) : (
+                'Verify & Download'
+              )}
+            </button>
+          </div>
+        </form>
+      )}
     </section>
   );
 }

@@ -75,13 +75,13 @@ export function verifyPassToken(token: string, secret: string): SignedPassPayloa
 }
 
 export function resolveTierFromAmount(amountPaise?: number, fallback?: string): PricingTierId {
-  if (fallback && fallback in PRICING_TABLE) {
-    return fallback as PricingTierId;
-  }
-  if (typeof amountPaise === 'number') {
+  if (typeof amountPaise === 'number' && amountPaise >= 29900) {
     if (amountPaise >= 69900) return 'tier_699';
     if (amountPaise >= 49900) return 'tier_499';
-    if (amountPaise >= 29900) return 'tier_299';
+    return 'tier_299';
+  }
+  if (fallback && fallback in PRICING_TABLE) {
+    return fallback as PricingTierId;
   }
   return 'tier_499';
 }

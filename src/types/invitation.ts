@@ -12,6 +12,7 @@ export interface PricingTier {
   id: PricingTierId;
   name: string;
   priceInr: number;
+  paymentPageUrl: string;
   resolutionLabel: string;
   quality: ExportQuality;
   badge?: string;

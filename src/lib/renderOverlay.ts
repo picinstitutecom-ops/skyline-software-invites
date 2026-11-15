@@ -17,10 +17,8 @@ export async function ensureFontsLoaded(): Promise<void> {
   if (typeof document === 'undefined' || !('fonts' in document)) return;
   try {
     await Promise.all([
-      document.fonts.load('600 64px "Playfair Display"'),
       document.fonts.load('700 72px "Playfair Display"'),
-      document.fonts.load('italic 500 32px "Playfair Display"'),
-      document.fonts.load('400 32px "Plus Jakarta Sans"'),
+      document.fonts.load('italic 700 36px "Playfair Display"'),
       document.fonts.load('600 32px "Plus Jakarta Sans"'),
       document.fonts.load('700 64px "Plus Jakarta Sans"'),
     ]);
@@ -37,24 +35,24 @@ function getFontFaces(style: InvitationConfig['typographyStyle']) {
       nameWeight: '700',
       nameUppercase: false,
       milestoneFont: '"Playfair Display", Georgia, serif',
-      milestoneStyle: 'italic 500',
+      milestoneStyle: 'italic 700',
       labelFont: '"Plus Jakarta Sans", sans-serif',
       bodyFont: '"Plus Jakarta Sans", sans-serif',
       parentsFont: '"Playfair Display", Georgia, serif',
-      parentsStyle: 'italic 500',
+      parentsStyle: 'italic 700',
     };
   }
   if (style === 'royal') {
     return {
       nameFont: '"Playfair Display", Georgia, serif',
-      nameWeight: '600',
+      nameWeight: '700',
       nameUppercase: true,
       milestoneFont: '"Playfair Display", Georgia, serif',
-      milestoneStyle: 'italic 500',
+      milestoneStyle: 'italic 700',
       labelFont: '"Plus Jakarta Sans", sans-serif',
       bodyFont: '"Plus Jakarta Sans", sans-serif',
       parentsFont: '"Playfair Display", Georgia, serif',
-      parentsStyle: 'italic 500',
+      parentsStyle: 'italic 700',
     };
   }
   return {
@@ -62,11 +60,11 @@ function getFontFaces(style: InvitationConfig['typographyStyle']) {
     nameWeight: '700',
     nameUppercase: false,
     milestoneFont: '"Playfair Display", Georgia, serif',
-    milestoneStyle: 'italic 500',
+    milestoneStyle: 'italic 700',
     labelFont: '"Plus Jakarta Sans", sans-serif',
     bodyFont: '"Plus Jakarta Sans", sans-serif',
     parentsFont: '"Playfair Display", Georgia, serif',
-    parentsStyle: 'italic 500',
+    parentsStyle: 'italic 700',
   };
 }
 
@@ -500,8 +498,94 @@ function drawThemeDivider(
 }
 
 /**
- * Subtle illuminated architectural corner highlights inside the invitation card.
+ * Theme-tailored architectural corner ornaments & ambient texture inside cards.
  */
+function drawThemeAmbientMotifs(
+  ctx: CanvasRenderingContext2D,
+  themeId: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  accentColor: string,
+  brightColor: string,
+  isIvory: boolean
+) {
+  ctx.save();
+  const baseAlpha = isIvory ? 0.24 : 0.34;
+
+  if (themeId === 'cosmic-astronaut') {
+    const stars = [
+      [x + 76, y + 72, 7],
+      [x + w - 76, y + 78, 6],
+      [x + 115, y + 135, 3.5],
+      [x + w - 122, y + 128, 3.5],
+      [x + 84, y + h - 78, 5],
+      [x + w - 84, y + h - 74, 6],
+    ];
+    ctx.fillStyle = brightColor;
+    for (const [sx, sy, r] of stars) {
+      ctx.globalAlpha = baseAlpha + 0.15;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy - r);
+      ctx.lineTo(sx + r * 0.28, sy - r * 0.28);
+      ctx.lineTo(sx + r, sy);
+      ctx.lineTo(sx + r * 0.28, sy + r * 0.28);
+      ctx.lineTo(sx, sy + r);
+      ctx.lineTo(sx - r * 0.28, sy + r * 0.28);
+      ctx.lineTo(sx - r, sy);
+      ctx.lineTo(sx - r * 0.28, sy - r * 0.28);
+      ctx.closePath();
+      ctx.fill();
+    }
+  } else if (themeId === 'ocean-mermaid') {
+    const bubbles = [
+      [x + 70, y + 85, 10],
+      [x + 98, y + 60, 5],
+      [x + w - 74, y + 88, 9],
+      [x + w - 104, y + 64, 5],
+      [x + 74, y + h - 72, 8],
+      [x + w - 76, y + h - 76, 9],
+    ];
+    ctx.strokeStyle = brightColor;
+    ctx.lineWidth = 1.6;
+    for (const [bx, by, br] of bubbles) {
+      ctx.globalAlpha = baseAlpha;
+      ctx.beginPath();
+      ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  } else if (themeId === 'grand-prix-racer') {
+    // Micro racing checkered corner blocks
+    ctx.globalAlpha = baseAlpha + 0.1;
+    const sq = 7;
+    for (const startX of [x + 42, x + w - 42 - sq * 4]) {
+      for (let c = 0; c < 4; c++) {
+        for (let r = 0; r < 2; r++) {
+          ctx.fillStyle = (c + r) % 2 === 0 ? accentColor : brightColor;
+          ctx.fillRect(startX + c * sq, y + 36 + r * sq, sq, sq);
+        }
+      }
+    }
+  } else {
+    // Wonderland / Royal / Princess delicate sparkles
+    const dots = [
+      [x + 74, y + 74, 3.2],
+      [x + w - 74, y + 74, 3.2],
+      [x + 74, y + h - 74, 3.2],
+      [x + w - 74, y + h - 74, 3.2],
+    ];
+    ctx.fillStyle = brightColor;
+    for (const [dx, dy, dr] of dots) {
+      ctx.globalAlpha = baseAlpha + 0.14;
+      ctx.beginPath();
+      ctx.arc(dx, dy, dr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
 function drawCardCorners(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -513,9 +597,9 @@ function drawCardCorners(
   ctx.save();
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2.2;
   const inset = 28;
-  const arm = 24;
+  const arm = 26;
 
   const corners = [
     { cx: x + inset, cy: y + inset, sx: 1, sy: 1 },
@@ -532,7 +616,7 @@ function drawCardCorners(
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.arc(c.cx + c.sx * 7, c.cy + c.sy * 7, 2.5, 0, Math.PI * 2);
+    ctx.arc(c.cx + c.sx * 8, c.cy + c.sy * 8, 2.8, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
@@ -554,80 +638,105 @@ export function drawIntroPlate(
   ctx.globalAlpha = alpha;
 
   // Measured top gradient scrim for effortless legibility over bright sky/palace
-  const topGrad = ctx.createLinearGradient(0, 0, 0, 440);
-  topGrad.addColorStop(0, 'rgba(7, 9, 18, 0.88)');
-  topGrad.addColorStop(0.58, 'rgba(7, 9, 18, 0.58)');
-  topGrad.addColorStop(1, 'rgba(7, 9, 18, 0)');
+  const topGrad = ctx.createLinearGradient(0, 0, 0, 460);
+  topGrad.addColorStop(0, 'rgba(6, 8, 18, 0.92)');
+  topGrad.addColorStop(0.58, 'rgba(6, 8, 18, 0.62)');
+  topGrad.addColorStop(1, 'rgba(6, 8, 18, 0)');
   ctx.fillStyle = topGrad;
-  ctx.fillRect(0, 0, HD_WIDTH, 440);
+  ctx.fillRect(0, 0, HD_WIDTH, 460);
 
   // Subtle luminous theme halo behind opening emblem
-  const halo = ctx.createRadialGradient(HD_WIDTH / 2, 130, 10, HD_WIDTH / 2, 130, 340);
+  const halo = ctx.createRadialGradient(HD_WIDTH / 2, 138, 12, HD_WIDTH / 2, 138, 360);
   halo.addColorStop(0, theme.palette.accentSoft);
   halo.addColorStop(1, 'rgba(0, 0, 0, 0)');
   ctx.fillStyle = halo;
-  ctx.fillRect(140, 0, 800, 320);
+  ctx.fillRect(120, 0, 840, 340);
 
   // Theme Emblem at top
   drawThemeEmblem(
     ctx,
     theme.id,
     HD_WIDTH / 2,
-    74,
-    0.95,
+    72,
+    1.0,
     theme.palette.accent,
     theme.palette.accentBright
   );
 
   // Theme-specific Opening Kicker
   ctx.fillStyle = theme.palette.accentBright;
-  ctx.font = `600 20px ${fonts.labelFont}`;
+  ctx.font = `700 22px ${fonts.labelFont}`;
   ctx.textBaseline = 'alphabetic';
   drawTrackedCenteredText(ctx, theme.wording.openingKicker, HD_WIDTH / 2, 128, 4.8);
 
-  // Highlighted Child Name
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
-  ctx.shadowBlur = 20;
-  ctx.shadowOffsetY = 4;
-
+  // Highlighted Bold Child Name with crisp dark halo + luminous 3-stop theme gradient
   const fittedName = fitAndWrapText(
     ctx,
     displayName,
     880,
-    76,
-    46,
+    88,
+    50,
     1,
     (size) => `${fonts.nameWeight} ${size}px ${fonts.nameFont}`,
     1.15
   );
 
-  const nameGrad = ctx.createLinearGradient(0, 150, 0, 220);
-  nameGrad.addColorStop(0, '#FFFFFF');
-  nameGrad.addColorStop(1, theme.palette.accentBright);
-  ctx.fillStyle = nameGrad;
   ctx.font = `${fonts.nameWeight} ${fittedName.fontSize}px ${fonts.nameFont}`;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(5, 7, 16, 0.82)';
+  ctx.lineWidth = 7.5;
   if (fonts.nameUppercase) {
-    drawTrackedCenteredText(ctx, fittedName.lines[0] ?? '', HD_WIDTH / 2, 206, 6);
+    const text = fittedName.lines[0] ?? '';
+    const chars = Array.from(text);
+    const widths = chars.map((ch) => ctx.measureText(ch).width);
+    const totalW = widths.reduce((s, w) => s + w, 0) + 6 * Math.max(0, chars.length - 1);
+    let cx = HD_WIDTH / 2 - totalW / 2;
+    ctx.textAlign = 'left';
+    for (let i = 0; i < chars.length; i++) {
+      ctx.strokeText(chars[i], cx, 212);
+      cx += widths[i] + 6;
+    }
   } else {
     ctx.textAlign = 'center';
-    ctx.fillText(fittedName.lines[0] ?? '', HD_WIDTH / 2, 206);
+    ctx.strokeText(fittedName.lines[0] ?? '', HD_WIDTH / 2, 212);
   }
 
-  // Milestone subtitle
-  ctx.shadowBlur = 12;
-  ctx.fillStyle = 'rgba(255, 252, 245, 0.95)';
+  ctx.shadowColor = theme.palette.accentSoft;
+  ctx.shadowBlur = 26;
+  ctx.shadowOffsetY = 4;
+
+  const nameGrad = ctx.createLinearGradient(0, 145, 0, 226);
+  nameGrad.addColorStop(0, '#FFFFFF');
+  nameGrad.addColorStop(0.5, theme.palette.accentBright);
+  nameGrad.addColorStop(1, theme.palette.accent);
+  ctx.fillStyle = nameGrad;
+  if (fonts.nameUppercase) {
+    drawTrackedCenteredText(ctx, fittedName.lines[0] ?? '', HD_WIDTH / 2, 212, 6);
+  } else {
+    ctx.textAlign = 'center';
+    ctx.fillText(fittedName.lines[0] ?? '', HD_WIDTH / 2, 212);
+  }
+
+  // Bold Milestone subtitle with dark outline & bright theme color
   const fittedMilestone = fitAndWrapText(
     ctx,
     milestone,
     820,
-    34,
-    24,
+    38,
+    25,
     1,
     (size) => `${fonts.milestoneStyle} ${size}px ${fonts.milestoneFont}`
   );
   ctx.font = `${fonts.milestoneStyle} ${fittedMilestone.fontSize}px ${fonts.milestoneFont}`;
   ctx.textAlign = 'center';
-  ctx.fillText(fittedMilestone.lines[0] ?? '', HD_WIDTH / 2, 258);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(5, 7, 16, 0.72)';
+  ctx.lineWidth = 4.5;
+  ctx.strokeText(fittedMilestone.lines[0] ?? '', HD_WIDTH / 2, 265);
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = theme.palette.accentBright;
+  ctx.fillText(fittedMilestone.lines[0] ?? '', HD_WIDTH / 2, 265);
 
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
@@ -635,8 +744,8 @@ export function drawIntroPlate(
     ctx,
     theme.id,
     HD_WIDTH / 2,
-    296,
-    185,
+    298,
+    195,
     theme.palette.accentSoft,
     theme.palette.accent,
     theme.palette.accentBright
@@ -660,44 +769,45 @@ export function drawCrestPlate(
   ctx.globalAlpha = alpha;
 
   const topGrad = ctx.createLinearGradient(0, 0, 0, 235);
-  topGrad.addColorStop(0, 'rgba(7, 9, 18, 0.78)');
+  topGrad.addColorStop(0, 'rgba(7, 9, 18, 0.80)');
   topGrad.addColorStop(0.55, 'rgba(7, 9, 18, 0.36)');
   topGrad.addColorStop(1, 'rgba(7, 9, 18, 0)');
   ctx.fillStyle = topGrad;
   ctx.fillRect(0, 0, HD_WIDTH, 235);
 
+  // Refined translucent theme crest plaque
+  const pillW = 680;
+  const pillH = 92;
+  const pillX = (HD_WIDTH - pillW) / 2;
+  const pillY = 34;
+
+  ctx.save();
+  drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 24);
+  ctx.fillStyle = theme.palette.darkSurface;
+  ctx.fill();
+  ctx.strokeStyle = theme.palette.accent;
+  ctx.lineWidth = 2.2;
+  ctx.stroke();
+  ctx.restore();
+
   ctx.fillStyle = theme.palette.accent;
-  ctx.font = `600 16px ${fonts.labelFont}`;
-  drawTrackedCenteredText(ctx, theme.wording.crestBadge, HD_WIDTH / 2, 66, 4.5);
+  ctx.font = `700 16px ${fonts.labelFont}`;
+  drawTrackedCenteredText(ctx, theme.wording.crestBadge, HD_WIDTH / 2, 68, 4.4);
 
   const label = `${childName}  ·  ${milestone}`;
   const fitted = fitAndWrapText(
     ctx,
     label,
-    860,
-    25,
+    pillW - 60,
+    26,
     18,
     1,
-    (size) => `600 ${size}px ${fonts.labelFont}`
+    (size) => `700 ${size}px ${fonts.labelFont}`
   );
 
-  ctx.fillStyle = '#FFFFFF';
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-  ctx.shadowBlur = 10;
-  ctx.font = `600 ${fitted.fontSize}px ${fonts.labelFont}`;
-  drawTrackedCenteredText(ctx, fitted.lines[0] ?? '', HD_WIDTH / 2, 104, 4.5);
-
-  ctx.shadowBlur = 0;
-  drawThemeDivider(
-    ctx,
-    theme.id,
-    HD_WIDTH / 2,
-    128,
-    130,
-    theme.palette.accentSoft,
-    theme.palette.accent,
-    theme.palette.accentBright
-  );
+  ctx.fillStyle = theme.palette.accentBright;
+  ctx.font = `700 ${fitted.fontSize}px ${fonts.labelFont}`;
+  drawTrackedCenteredText(ctx, fitted.lines[0] ?? '', HD_WIDTH / 2, 106, 4.2);
 
   ctx.restore();
 }
@@ -713,14 +823,14 @@ export function drawDetailsCardPlate(
   const fonts = getFontFaces(config.typographyStyle);
   const isIvory = config.cardSurface === 'ivory';
 
-  const outerBorder = isIvory ? theme.palette.ivoryBorder : theme.palette.darkBorder;
-  const innerBorder = isIvory ? 'rgba(24, 24, 27, 0.10)' : 'rgba(255, 255, 255, 0.14)';
+  const outerBorder = isIvory ? theme.palette.ivoryBorder : theme.palette.accent;
+  const innerBorder = isIvory ? 'rgba(24, 24, 27, 0.12)' : theme.palette.darkBorder;
   const accentColor = isIvory ? theme.palette.ivoryAccent : theme.palette.accent;
   const highlightColor = isIvory ? theme.palette.ivoryAccent : theme.palette.accentBright;
   const primaryText = isIvory ? '#18181B' : '#FFFFFF';
-  const secondaryText = isIvory ? '#3F3F46' : 'rgba(244, 244, 245, 0.94)';
-  const labelText = isIvory ? '#71717A' : 'rgba(212, 212, 216, 0.8)';
-  const dividerColor = isIvory ? 'rgba(24, 24, 27, 0.14)' : 'rgba(255, 255, 255, 0.18)';
+  const secondaryText = isIvory ? '#27272A' : '#FFFFFF';
+  const labelText = isIvory ? theme.palette.ivoryAccent : theme.palette.accent;
+  const dividerColor = isIvory ? 'rgba(24, 24, 27, 0.16)' : theme.palette.accentSoft;
 
   const childName = config.childName.trim() || theme.defaultChildName;
   const milestone = config.milestone.trim() || theme.defaultMilestone;
@@ -795,18 +905,29 @@ export function drawDetailsCardPlate(
   ctx.fillRect(cardX + 32, cardY + 1, cardW - 64, 3);
   ctx.restore();
 
-  // Outer & inset hairline borders + theme corners
+  // Outer & inset hairline borders + theme corners + ambient theme motifs
   ctx.strokeStyle = outerBorder;
-  ctx.lineWidth = 2.2;
+  ctx.lineWidth = 3;
   drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 32);
   ctx.stroke();
 
   ctx.strokeStyle = innerBorder;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 1.2;
   drawRoundedRect(ctx, cardX + 14, cardY + 14, cardW - 28, cardH - 28, 22);
   ctx.stroke();
 
   drawCardCorners(ctx, cardX, cardY, cardW, cardH, accentColor);
+  drawThemeAmbientMotifs(
+    ctx,
+    theme.id,
+    cardX,
+    cardY,
+    cardW,
+    cardH,
+    accentColor,
+    highlightColor,
+    isIvory
+  );
 
   ctx.textBaseline = 'alphabetic';
 
@@ -816,8 +937,8 @@ export function drawDetailsCardPlate(
     ctx,
     displayName,
     innerMaxW,
-    60,
-    40,
+    68,
+    42,
     1,
     (size) => `${fonts.nameWeight} ${size}px ${fonts.nameFont}`
   );
@@ -825,8 +946,8 @@ export function drawDetailsCardPlate(
     ctx,
     milestone,
     innerMaxW,
-    29,
-    22,
+    33,
+    23,
     1,
     (size) => `${fonts.milestoneStyle} ${size}px ${fonts.milestoneFont}`
   );
@@ -834,27 +955,27 @@ export function drawDetailsCardPlate(
     ctx,
     dateLine || 'Date to be announced',
     innerMaxW,
-    30,
-    21,
+    32,
+    22,
     1,
-    (size) => `600 ${size}px ${fonts.bodyFont}`
+    (size) => `700 ${size}px ${fonts.bodyFont}`
   );
   const fittedVenue = fitAndWrapText(
     ctx,
     venue,
     innerMaxW,
-    28,
-    20,
+    29,
+    21,
     2,
-    (size) => `500 ${size}px ${fonts.bodyFont}`,
-    1.32
+    (size) => `700 ${size}px ${fonts.bodyFont}`,
+    1.3
   );
   const fittedParents = fitAndWrapText(
     ctx,
     parents,
     innerMaxW,
-    32,
-    22,
+    35,
+    23,
     2,
     (size) => `${fonts.parentsStyle} ${size}px ${fonts.parentsFont}`,
     1.26
@@ -864,7 +985,6 @@ export function drawDetailsCardPlate(
   const parentsLinesCount = Math.max(1, fittedParents.lines.length);
 
   if (!compactMode) {
-    // Compute exact stack height for mathematical vertical centering
     const hEmblem = 34;
     const hKicker = 22;
     const hName = fittedName.fontSize * 0.9;
@@ -887,27 +1007,28 @@ export function drawDetailsCardPlate(
       hRule +
       hParentsBlock +
       gaps -
-      140; // optical baseline adjustment
+      140;
 
     let cursorY = cardY + Math.max(58, Math.round((cardH - totalContentHeight) / 2)) - 42;
 
     // 1. Theme Emblem
-    drawThemeEmblem(ctx, theme.id, cx, cursorY, 0.85, accentColor, highlightColor);
+    drawThemeEmblem(ctx, theme.id, cx, cursorY, 0.88, accentColor, highlightColor);
     cursorY += 44;
 
     // 2. Theme-Specific Kicker
-    ctx.fillStyle = accentColor;
-    ctx.font = `600 18px ${fonts.labelFont}`;
+    ctx.fillStyle = highlightColor;
+    ctx.font = `700 19px ${fonts.labelFont}`;
     drawTrackedCenteredText(ctx, theme.wording.detailsKicker, cx, cursorY, 4.4);
-    cursorY += 62;
+    cursorY += 64;
 
-    // 3. Highlighted Child Name
+    // 3. Bold Highlighted Child Name in Theme Gradient
     if (isIvory) {
-      ctx.fillStyle = primaryText;
+      ctx.fillStyle = theme.palette.ivoryAccent;
     } else {
-      const nameGrad = ctx.createLinearGradient(0, cursorY - 46, 0, cursorY + 8);
+      const nameGrad = ctx.createLinearGradient(0, cursorY - 52, 0, cursorY + 10);
       nameGrad.addColorStop(0, '#FFFFFF');
-      nameGrad.addColorStop(1, highlightColor);
+      nameGrad.addColorStop(0.6, highlightColor);
+      nameGrad.addColorStop(1, accentColor);
       ctx.fillStyle = nameGrad;
     }
     ctx.font = `${fonts.nameWeight} ${fittedName.fontSize}px ${fonts.nameFont}`;
@@ -917,10 +1038,10 @@ export function drawDetailsCardPlate(
       ctx.textAlign = 'center';
       ctx.fillText(fittedName.lines[0] ?? '', cx, cursorY);
     }
-    cursorY += 42;
+    cursorY += 44;
 
-    // 4. Milestone
-    ctx.fillStyle = accentColor;
+    // 4. Bold Milestone in Theme Color
+    ctx.fillStyle = highlightColor;
     ctx.font = `${fonts.milestoneStyle} ${fittedMilestone.fontSize}px ${fonts.milestoneFont}`;
     ctx.textAlign = 'center';
     ctx.fillText(fittedMilestone.lines[0] ?? '', cx, cursorY);
@@ -932,55 +1053,66 @@ export function drawDetailsCardPlate(
       theme.id,
       cx,
       cursorY,
-      165,
+      175,
       dividerColor,
       accentColor,
       highlightColor
     );
     cursorY += 44;
 
-    // 6. Date & Time
+    // 6. Date & Time inside bold theme-colored highlight plaque
     ctx.fillStyle = labelText;
-    ctx.font = `600 16px ${fonts.labelFont}`;
+    ctx.font = `700 17px ${fonts.labelFont}`;
     drawTrackedCenteredText(ctx, 'DATE & TIME', cx, cursorY, 4);
     cursorY += 36;
 
+    ctx.font = `700 ${fittedDate.fontSize}px ${fonts.bodyFont}`;
+    const dateTextStr = fittedDate.lines[0] ?? '';
+    const dateChipW = Math.min(innerMaxW, Math.max(380, ctx.measureText(dateTextStr).width + 68));
+    ctx.save();
+    drawRoundedRect(ctx, cx - dateChipW / 2, cursorY - 35, dateChipW, 50, 16);
+    ctx.fillStyle = isIvory ? 'rgba(24, 24, 27, 0.06)' : theme.palette.accentSoft;
+    ctx.fill();
+    ctx.strokeStyle = outerBorder;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    ctx.restore();
+
     ctx.fillStyle = primaryText;
-    ctx.font = `600 ${fittedDate.fontSize}px ${fonts.bodyFont}`;
     ctx.textAlign = 'center';
-    ctx.fillText(fittedDate.lines[0] ?? '', cx, cursorY);
-    cursorY += 46;
+    ctx.fillText(dateTextStr, cx, cursorY);
+    cursorY += 50;
 
     // 7. Venue
     ctx.fillStyle = labelText;
-    ctx.font = `600 16px ${fonts.labelFont}`;
+    ctx.font = `700 17px ${fonts.labelFont}`;
     drawTrackedCenteredText(ctx, 'VENUE', cx, cursorY, 4);
     cursorY += 34;
 
     ctx.fillStyle = secondaryText;
-    ctx.font = `500 ${fittedVenue.fontSize}px ${fonts.bodyFont}`;
+    ctx.font = `700 ${fittedVenue.fontSize}px ${fonts.bodyFont}`;
     ctx.textAlign = 'center';
     fittedVenue.lines.forEach((line, idx) => {
       ctx.fillText(line, cx, cursorY + idx * fittedVenue.lineHeight);
     });
     cursorY += venueLinesCount * fittedVenue.lineHeight + 12;
 
-    // 8. Subtle Hairline before Parents
+    // 8. Subtle Theme Hairline before Parents
     ctx.strokeStyle = dividerColor;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(cx - 190, cursorY);
     ctx.lineTo(cx + 190, cursorY);
     ctx.stroke();
     cursorY += 36;
 
-    // 9. Parents' Names
+    // 9. Parents' Names in radiant theme color
     ctx.fillStyle = labelText;
-    ctx.font = `600 15px ${fonts.labelFont}`;
+    ctx.font = `700 16px ${fonts.labelFont}`;
     drawTrackedCenteredText(ctx, hostPrefix, cx, cursorY, 3.8);
     cursorY += 38;
 
-    ctx.fillStyle = primaryText;
+    ctx.fillStyle = highlightColor;
     ctx.font = `${fonts.parentsStyle} ${fittedParents.fontSize}px ${fonts.parentsFont}`;
     ctx.textAlign = 'center';
     fittedParents.lines.forEach((line, idx) => {
@@ -1000,24 +1132,35 @@ export function drawDetailsCardPlate(
       (parentsLinesCount - 1) * fittedParents.lineHeight;
     let cursorY = cardY + Math.max(54, Math.round((cardH - contentH) / 2)) + 12;
 
-    ctx.fillStyle = accentColor;
-    ctx.font = `600 16px ${fonts.labelFont}`;
+    ctx.fillStyle = labelText;
+    ctx.font = `700 17px ${fonts.labelFont}`;
     drawTrackedCenteredText(ctx, 'DATE & TIME', cx, cursorY, 4);
     cursorY += 36;
 
-    ctx.fillStyle = primaryText;
-    ctx.font = `600 ${fittedDate.fontSize}px ${fonts.bodyFont}`;
-    ctx.textAlign = 'center';
-    ctx.fillText(fittedDate.lines[0] ?? '', cx, cursorY);
-    cursorY += 46;
+    ctx.font = `700 ${fittedDate.fontSize}px ${fonts.bodyFont}`;
+    const dateTextStr = fittedDate.lines[0] ?? '';
+    const dateChipW = Math.min(innerMaxW, Math.max(380, ctx.measureText(dateTextStr).width + 64));
+    ctx.save();
+    drawRoundedRect(ctx, cx - dateChipW / 2, cursorY - 34, dateChipW, 48, 16);
+    ctx.fillStyle = isIvory ? 'rgba(24, 24, 27, 0.06)' : theme.palette.accentSoft;
+    ctx.fill();
+    ctx.strokeStyle = outerBorder;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    ctx.restore();
 
-    ctx.fillStyle = accentColor;
-    ctx.font = `600 16px ${fonts.labelFont}`;
+    ctx.fillStyle = primaryText;
+    ctx.textAlign = 'center';
+    ctx.fillText(dateTextStr, cx, cursorY);
+    cursorY += 48;
+
+    ctx.fillStyle = labelText;
+    ctx.font = `700 17px ${fonts.labelFont}`;
     drawTrackedCenteredText(ctx, 'VENUE', cx, cursorY, 4);
     cursorY += 34;
 
     ctx.fillStyle = secondaryText;
-    ctx.font = `500 ${fittedVenue.fontSize}px ${fonts.bodyFont}`;
+    ctx.font = `700 ${fittedVenue.fontSize}px ${fonts.bodyFont}`;
     ctx.textAlign = 'center';
     fittedVenue.lines.forEach((line, idx) => {
       ctx.fillText(line, cx, cursorY + idx * fittedVenue.lineHeight);
@@ -1037,11 +1180,11 @@ export function drawDetailsCardPlate(
     cursorY += 38;
 
     ctx.fillStyle = labelText;
-    ctx.font = `600 15px ${fonts.labelFont}`;
+    ctx.font = `700 16px ${fonts.labelFont}`;
     drawTrackedCenteredText(ctx, hostPrefix, cx, cursorY, 3.8);
     cursorY += 38;
 
-    ctx.fillStyle = primaryText;
+    ctx.fillStyle = highlightColor;
     ctx.font = `${fonts.parentsStyle} ${fittedParents.fontSize}px ${fonts.parentsFont}`;
     ctx.textAlign = 'center';
     fittedParents.lines.forEach((line, idx) => {
@@ -1088,45 +1231,65 @@ export function drawTopHeaderForAlwaysMode(
   ctx.font = `600 18px ${fonts.labelFont}`;
   drawTrackedCenteredText(ctx, theme.wording.crestBadge, HD_WIDTH / 2, 104, 4.6);
 
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-  ctx.shadowBlur = 16;
-  ctx.shadowOffsetY = 3;
-
   const fittedName = fitAndWrapText(
     ctx,
     displayName,
     880,
-    62,
-    40,
+    70,
+    42,
     1,
     (size) => `${fonts.nameWeight} ${size}px ${fonts.nameFont}`
   );
-  const nameGrad = ctx.createLinearGradient(0, 120, 0, 185);
-  nameGrad.addColorStop(0, '#FFFFFF');
-  nameGrad.addColorStop(1, theme.palette.accentBright);
-  ctx.fillStyle = nameGrad;
   ctx.font = `${fonts.nameWeight} ${fittedName.fontSize}px ${fonts.nameFont}`;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(5, 7, 16, 0.8)';
+  ctx.lineWidth = 6;
   if (fonts.nameUppercase) {
-    drawTrackedCenteredText(ctx, fittedName.lines[0] ?? '', HD_WIDTH / 2, 170, 5);
+    const text = fittedName.lines[0] ?? '';
+    const chars = Array.from(text);
+    const widths = chars.map((ch) => ctx.measureText(ch).width);
+    const totalW = widths.reduce((s, w) => s + w, 0) + 5 * Math.max(0, chars.length - 1);
+    let cx = HD_WIDTH / 2 - totalW / 2;
+    ctx.textAlign = 'left';
+    for (let i = 0; i < chars.length; i++) {
+      ctx.strokeText(chars[i], cx, 172);
+      cx += widths[i] + 5;
+    }
   } else {
     ctx.textAlign = 'center';
-    ctx.fillText(fittedName.lines[0] ?? '', HD_WIDTH / 2, 170);
+    ctx.strokeText(fittedName.lines[0] ?? '', HD_WIDTH / 2, 172);
+  }
+
+  ctx.shadowColor = theme.palette.accentSoft;
+  ctx.shadowBlur = 22;
+  ctx.shadowOffsetY = 4;
+
+  const nameGrad = ctx.createLinearGradient(0, 120, 0, 188);
+  nameGrad.addColorStop(0, '#FFFFFF');
+  nameGrad.addColorStop(0.55, theme.palette.accentBright);
+  nameGrad.addColorStop(1, theme.palette.accent);
+  ctx.fillStyle = nameGrad;
+  if (fonts.nameUppercase) {
+    drawTrackedCenteredText(ctx, fittedName.lines[0] ?? '', HD_WIDTH / 2, 172, 5);
+  } else {
+    ctx.textAlign = 'center';
+    ctx.fillText(fittedName.lines[0] ?? '', HD_WIDTH / 2, 172);
   }
 
   ctx.shadowBlur = 10;
-  ctx.fillStyle = 'rgba(255, 252, 245, 0.94)';
+  ctx.fillStyle = theme.palette.accentBright;
   const fittedMilestone = fitAndWrapText(
     ctx,
     milestone,
     820,
-    29,
-    21,
+    31,
+    22,
     1,
     (size) => `${fonts.milestoneStyle} ${size}px ${fonts.milestoneFont}`
   );
   ctx.font = `${fonts.milestoneStyle} ${fittedMilestone.fontSize}px ${fonts.milestoneFont}`;
   ctx.textAlign = 'center';
-  ctx.fillText(fittedMilestone.lines[0] ?? '', HD_WIDTH / 2, 218);
+  ctx.fillText(fittedMilestone.lines[0] ?? '', HD_WIDTH / 2, 220);
 
   ctx.shadowBlur = 0;
   drawThemeDivider(
