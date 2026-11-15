@@ -1,0 +1,6 @@
+{
+  "name": "Keepsake Studio",
+  "description": "Create personalized HD birthday invitation videos with themed animated stories, custom celebration details, and crisp editorial typography.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

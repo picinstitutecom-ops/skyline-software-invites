@@ -1,0 +1,110 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-display: "Playfair Display", Georgia, serif;
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    color-scheme: dark;
+  }
+
+  h1, h2, .font-display {
+    font-family: var(--font-display);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Cute 3D Tactile Pressable Buttons */
+.btn-3d-purple {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.28),
+    0 5px 0 0 #4c1d95,
+    0 10px 22px -6px rgba(139, 92, 246, 0.5);
+  transition: transform 110ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 110ms ease, filter 150ms ease;
+}
+.btn-3d-purple:hover:not(:disabled) {
+  transform: translateY(-2px);
+  filter: brightness(1.08);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.34),
+    0 7px 0 0 #4c1d95,
+    0 14px 28px -6px rgba(168, 85, 247, 0.62);
+}
+.btn-3d-purple:active:not(:disabled) {
+  transform: translateY(4px);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.16),
+    0 1px 0 0 #4c1d95,
+    0 4px 10px -4px rgba(139, 92, 246, 0.35);
+}
+
+.btn-3d-surface {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.1),
+    0 4px 0 0 #1b1730,
+    0 6px 14px -4px rgba(0, 0, 0, 0.45);
+  transition: transform 110ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 110ms ease, border-color 150ms ease;
+}
+.btn-3d-surface:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.14),
+    0 5px 0 0 #241e42,
+    0 8px 18px -4px rgba(124, 58, 237, 0.28);
+}
+.btn-3d-surface:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 1px 0 0 #1b1730;
+}
+
+.btn-3d-emerald {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.28),
+    0 4px 0 0 #065f46,
+    0 8px 18px -4px rgba(16, 185, 129, 0.45);
+  transition: transform 110ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 110ms ease;
+}
+.btn-3d-emerald:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.btn-3d-emerald:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 0 #065f46;
+}
+
+.perspective-1200 {
+  perspective: 1200px;
+}
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+.backface-hidden {
+  backface-visibility: hidden;
+}
+
+/* Sleek Horizontal Scrollbar for Sideways Details Rail */
+.sideways-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+.sideways-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 9999px;
+}
+.sideways-scroll::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.45);
+  border-radius: 9999px;
+}
+.sideways-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(168, 85, 247, 0.7);
+}
