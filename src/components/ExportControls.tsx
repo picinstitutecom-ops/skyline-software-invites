@@ -70,8 +70,11 @@ export function ExportControls({
       const res = await fetch(exportJob.downloadUrl);
       if (!res.ok) throw new Error('Download unavailable');
       const blob = await res.blob();
+      const mimeType =
+        blob.type ||
+        (exportJob.filename.endsWith('.webm') ? 'video/webm' : 'video/mp4');
       const mp4File = new File([blob], exportJob.filename, {
-        type: 'video/mp4',
+        type: mimeType,
       });
 
       if (

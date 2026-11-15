@@ -503,7 +503,11 @@ async function startServer() {
   app.use(express.urlencoded({ extended: true }));
 
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, razorpayConfigured: Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) });
+    res.json({
+      ok: true,
+      razorpayConfigured: Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET),
+      ffmpegExportAvailable: true,
+    });
   });
 
   // 1. Create Razorpay Order + Hosted Payment Link (Works in mobile, desktop, & iframe)

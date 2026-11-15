@@ -12,10 +12,13 @@ import {
 import { DEFAULT_INVITATION_CONFIG, getThemeById, THEME_PRESETS } from './data/themes';
 import { BRAND_LOGO_URL, getPricingTier } from './data/pricing';
 import {
+  FetchHttpError,
   isInsideIframe,
   openRazorpayModalCheckout,
+  PUBLIC_RAZORPAY_KEY_ID,
   safeFetchJson,
 } from './lib/razorpay';
+import { exportInvitationVideoInBrowser } from './lib/browserVideoExport';
 import {
   generateExportOverlayPlates,
   generateStillCardPng,
@@ -212,6 +215,41 @@ export default function App() {
             ? videoRef.current.duration
             : activeTheme.durationSeconds;
 
+        const useBrowserFallback = async () => {
+          setExportJob({
+            jobId: 'browser-hd',
+            status: 'processing',
+            progress: 8,
+          });
+          const result = await exportInvitationVideoInBrowser({
+            config: activeConfig,
+            theme: activeTheme,
+            targetWidth,
+            targetHeight,
+            onProgress: (pct) => {
+              setExportJob({
+                jobId: 'browser-hd',
+                status: 'processing',
+                progress: pct,
+              });
+            },
+          });
+          setExportJob({
+            jobId: 'browser-hd',
+            status: 'completed',
+            progress: 100,
+            downloadUrl: result.downloadUrl,
+            filename: result.filename,
+          });
+          setIsExporting(false);
+          triggerDownload(result.downloadUrl, result.filename);
+        };
+
+        if (passToUse.downloadToken.startsWith('direct_')) {
+          await useBrowserFallback();
+          return;
+        }
+
         const plates = await generateExportOverlayPlates(
           activeConfig,
           activeTheme,
@@ -234,6 +272,13 @@ export default function App() {
             }),
           });
         } catch (apiErr) {
+          if (
+            apiErr instanceof FetchHttpError &&
+            (apiErr.status === 404 || apiErr.status === 405 || apiErr.status >= 500)
+          ) {
+            await useBrowserFallback();
+            return;
+          }
           const msg = apiErr instanceof Error ? apiErr.message : 'Could not start video rendering.';
           if (msg.toLowerCase().includes('unlock') || msg.toLowerCase().includes('render limit')) {
             localStorage.removeItem(PAID_PASS_STORAGE_KEY);
@@ -449,7 +494,8 @@ export default function App() {
         // Non-fatal storage error
       }
 
-      const orderData = await safeFetchJson<{
+      let orderData: {
+        fallbackDirectCheckout?: boolean;
         orderId?: string;
         amount?: number;
         currency?: string;
@@ -457,20 +503,71 @@ export default function App() {
         paymentLinkId?: string;
         shortUrl?: string;
         error?: string;
-      }>('/api/payments/create-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tierId: selectedTierId,
-          childName: config.childName || selectedTheme.defaultChildName,
-          themeId: selectedTheme.id,
-          themeTitle: selectedTheme.title,
-          callbackOrigin: window.location.origin,
-        }),
-      });
+      } | null = null;
 
-      if (!orderData.orderId || !orderData.keyId || !orderData.amount) {
-        throw new Error(orderData.error || 'Could not initialize Razorpay order.');
+      try {
+        orderData = await safeFetchJson('/api/payments/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tierId: selectedTierId,
+            childName: config.childName || selectedTheme.defaultChildName,
+            themeId: selectedTheme.id,
+            themeTitle: selectedTheme.title,
+            callbackOrigin: window.location.origin,
+          }),
+        });
+      } catch (createErr) {
+        if (
+          createErr instanceof FetchHttpError &&
+          (createErr.status === 404 || createErr.status === 405 || createErr.status >= 500)
+        ) {
+          orderData = {
+            fallbackDirectCheckout: true,
+            keyId: PUBLIC_RAZORPAY_KEY_ID,
+            amount: selectedTheme.priceInr * 100,
+            currency: 'INR',
+          };
+        } else {
+          throw createErr;
+        }
+      }
+
+      const resolvedKeyId = orderData?.keyId || PUBLIC_RAZORPAY_KEY_ID;
+      const resolvedAmount = orderData?.amount || selectedTheme.priceInr * 100;
+
+      // Fallback Direct Standard Checkout when deployed statically or without server secret
+      if (orderData?.fallbackDirectCheckout || !orderData?.orderId) {
+        const directResp = await openRazorpayModalCheckout({
+          keyId: resolvedKeyId,
+          amount: resolvedAmount,
+          currency: orderData?.currency || 'INR',
+          title: 'Skyline Software',
+          description: `${selectedTheme.title} (${selectedTheme.editionLabel})`,
+          logoUrl: BRAND_LOGO_URL,
+          prefillName: config.parentsName || config.childName,
+        });
+
+        const directPass: PaidPass = {
+          downloadToken: `direct_${directResp.razorpay_payment_id}`,
+          tierId: selectedTierId,
+          paymentId: directResp.razorpay_payment_id,
+          orderId: directResp.razorpay_order_id || 'direct_checkout',
+          priceInr: selectedTheme.priceInr,
+        };
+
+        setPaidPass(directPass);
+        setActivePaymentLink(null);
+        try {
+          localStorage.setItem(PAID_PASS_STORAGE_KEY, JSON.stringify(directPass));
+          localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
+        } catch {
+          // Non-fatal storage error
+        }
+
+        setIsProcessingPayment(false);
+        await runExportWithPass(directPass);
+        return;
       }
 
       if (orderData.paymentLinkId && orderData.shortUrl) {
@@ -489,9 +586,9 @@ export default function App() {
 
       // Inside iframe preview: launch non-redirect modal checkout (no callback_url/redirect: true)
       const rzpResponse = await openRazorpayModalCheckout({
-        keyId: orderData.keyId,
+        keyId: resolvedKeyId,
         orderId: orderData.orderId,
-        amount: orderData.amount,
+        amount: resolvedAmount,
         currency: orderData.currency || 'INR',
         title: 'Skyline Software',
         description: `${selectedTheme.title} (${selectedTheme.editionLabel})`,
@@ -499,30 +596,48 @@ export default function App() {
         prefillName: config.parentsName || config.childName,
       });
 
-      const verifyData = await safeFetchJson<
-        Partial<PaidPass> & { verified?: boolean; error?: string }
-      >('/api/payments/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          razorpay_order_id: rzpResponse.razorpay_order_id,
-          razorpay_payment_id: rzpResponse.razorpay_payment_id,
-          razorpay_signature: rzpResponse.razorpay_signature,
-          tierId: selectedTierId,
-        }),
-      });
+      let verifiedPass: PaidPass;
+      try {
+        const verifyData = await safeFetchJson<
+          Partial<PaidPass> & { verified?: boolean; error?: string }
+        >('/api/payments/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            razorpay_order_id: rzpResponse.razorpay_order_id || orderData.orderId,
+            razorpay_payment_id: rzpResponse.razorpay_payment_id,
+            razorpay_signature: rzpResponse.razorpay_signature,
+            tierId: selectedTierId,
+          }),
+        });
 
-      if (!verifyData.verified || !verifyData.downloadToken) {
-        throw new Error(verifyData.error || 'Payment verification failed.');
+        if (!verifyData.verified || !verifyData.downloadToken) {
+          throw new Error(verifyData.error || 'Payment verification failed.');
+        }
+
+        verifiedPass = {
+          downloadToken: verifyData.downloadToken,
+          tierId: (verifyData.tierId as PricingTierId) ?? selectedTierId,
+          paymentId: verifyData.paymentId ?? rzpResponse.razorpay_payment_id,
+          orderId: verifyData.orderId ?? orderData.orderId,
+          priceInr: verifyData.priceInr ?? selectedTheme.priceInr,
+        };
+      } catch (verifyErr) {
+        if (
+          verifyErr instanceof FetchHttpError &&
+          (verifyErr.status === 404 || verifyErr.status === 405)
+        ) {
+          verifiedPass = {
+            downloadToken: `direct_${rzpResponse.razorpay_payment_id}`,
+            tierId: selectedTierId,
+            paymentId: rzpResponse.razorpay_payment_id,
+            orderId: rzpResponse.razorpay_order_id || orderData.orderId,
+            priceInr: selectedTheme.priceInr,
+          };
+        } else {
+          throw verifyErr;
+        }
       }
-
-      const verifiedPass: PaidPass = {
-        downloadToken: verifyData.downloadToken,
-        tierId: (verifyData.tierId as PricingTierId) ?? selectedTierId,
-        paymentId: verifyData.paymentId ?? rzpResponse.razorpay_payment_id,
-        orderId: verifyData.orderId ?? rzpResponse.razorpay_order_id,
-        priceInr: verifyData.priceInr ?? selectedTheme.priceInr,
-      };
 
       setPaidPass(verifiedPass);
       setActivePaymentLink(null);

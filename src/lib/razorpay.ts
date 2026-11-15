@@ -1,7 +1,20 @@
 export interface RazorpaySuccessResponse {
   razorpay_payment_id: string;
-  razorpay_order_id: string;
-  razorpay_signature: string;
+  razorpay_order_id?: string;
+  razorpay_signature?: string;
+}
+
+export const PUBLIC_RAZORPAY_KEY_ID =
+  (import.meta.env.VITE_RAZORPAY_KEY_ID as string | undefined) ||
+  'rzp_live_U0TEjZjeBWGtaI';
+
+export class FetchHttpError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'FetchHttpError';
+    this.status = status;
+  }
 }
 
 interface RazorpayWindow extends Window {
@@ -21,9 +34,15 @@ export async function safeFetchJson<T>(url: string, init?: RequestInit): Promise
       parsed = JSON.parse(rawText);
     } catch {
       if (!response.ok) {
-        throw new Error(`Request failed (${response.status}). Please retry.`);
+        throw new FetchHttpError(
+          `Endpoint unavailable (${response.status}).`,
+          response.status
+        );
       }
-      throw new Error('Unexpected response format from server. Please retry.');
+      throw new FetchHttpError(
+        'Unexpected non-JSON response from server.',
+        response.status
+      );
     }
   }
 
@@ -35,7 +54,7 @@ export async function safeFetchJson<T>(url: string, init?: RequestInit): Promise
       typeof (parsed as { error?: unknown }).error === 'string'
         ? (parsed as { error: string }).error
         : `Request failed with status ${response.status}.`;
-    throw new Error(errMsg);
+    throw new FetchHttpError(errMsg, response.status);
   }
 
   return (parsed ?? {}) as T;
@@ -79,11 +98,11 @@ export function loadRazorpayScript(): Promise<void> {
   return scriptPromise;
 }
 
-function buildSafeHttpUrl(rawUrl?: string): string | undefined {
+function buildSafeHttpsUrl(rawUrl?: string): string | undefined {
   if (!rawUrl || typeof window === 'undefined') return undefined;
   try {
     const resolved = new URL(rawUrl, window.location.origin);
-    if (resolved.protocol === 'https:' || resolved.protocol === 'http:') {
+    if (resolved.protocol === 'https:') {
       return resolved.toString();
     }
     return undefined;
@@ -92,9 +111,13 @@ function buildSafeHttpUrl(rawUrl?: string): string | undefined {
   }
 }
 
+function sanitizeAscii(value: string, maxLen: number): string {
+  return value.replace(/[^A-Za-z0-9\s.,()\-:/]/g, '').trim().slice(0, maxLen);
+}
+
 export async function openRazorpayModalCheckout(options: {
   keyId: string;
-  orderId: string;
+  orderId?: string;
   amount: number;
   currency: string;
   title: string;
@@ -108,19 +131,20 @@ export async function openRazorpayModalCheckout(options: {
     throw new Error('Razorpay Checkout SDK did not initialize.');
   }
 
-  const safeImage = buildSafeHttpUrl(options.logoUrl);
-  const safeName = options.prefillName?.replace(/[^\w\s.-]/g, '').trim().slice(0, 48);
+  const safeImage = buildSafeHttpsUrl(options.logoUrl);
+  const safeName = options.prefillName
+    ? sanitizeAscii(options.prefillName, 48)
+    : undefined;
 
   return new Promise<RazorpaySuccessResponse>((resolve, reject) => {
     let settled = false;
 
     const rzpOptions: Record<string, unknown> = {
-      key: options.keyId,
-      amount: options.amount,
-      currency: options.currency || 'INR',
-      name: options.title.slice(0, 50),
-      description: options.description.slice(0, 120),
-      order_id: options.orderId,
+      key: options.keyId.trim(),
+      amount: Math.round(options.amount),
+      currency: (options.currency || 'INR').toUpperCase(),
+      name: sanitizeAscii(options.title, 50) || 'Skyline Software',
+      description: sanitizeAscii(options.description, 120) || 'HD Birthday Video Invite',
       redirect: false,
       theme: {
         color: '#7C3AED',
@@ -139,6 +163,9 @@ export async function openRazorpayModalCheckout(options: {
       },
     };
 
+    if (options.orderId) {
+      rzpOptions.order_id = options.orderId;
+    }
     if (safeImage) {
       rzpOptions.image = safeImage;
     }
@@ -161,4 +188,5 @@ export async function openRazorpayModalCheckout(options: {
     rzp.open();
   });
 }
+
 
